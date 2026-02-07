@@ -10,11 +10,11 @@ enum EVOError {
     EVO_OVER_VOLTAGE = 0x01,
     EVO_UNDER_VOLTAGE = 0x02,
     EVO_OVER_CURRENT = 0x03,
-    EVO_MOS_OVER_TEMP = 0x04,
-    EVO_COIL_OVER_TEMP = 0x05,
-    EVO_COMM_LOST = 0x06,
-    EVO_OVERLOAD = 0x07,
-    EVO_ENCODER_ERROR = 0x08,
+    EVO_MOS_OVER_TEMP = 0x09,
+    EVO_COIL_OVER_TEMP = 0x0A,
+    EVO_ENCODER_ERROR = 0x0B,
+    EVO_OVERLOAD = 0x0F,
+    EVO_COMM_LOST = 0x10,
     EVO_UNKNOWN_ERROR = 0xFF
 };
 
@@ -92,9 +92,8 @@ class EvoMotorDriver : public MotorDriver {
     std::atomic<uint8_t> mos_temperature_{0};
     void set_motor_zero_evo();
     void clear_motor_error_evo();
-    void write_register_evo(uint16_t index, uint8_t subindex, int32_t value);
-    void read_register_evo(uint16_t index, uint8_t subindex);
-    void save_register_evo(uint8_t rid);
+    void write_register_evo(uint8_t index, int32_t value);
+    void save_register_evo();
     virtual void can_rx_cbk(const can_frame& rx_frame);
     std::shared_ptr<SocketCAN> can_;
 };

@@ -361,7 +361,7 @@ void DmMotorDriver::write_register_dm(uint8_t rid, int32_t value) {
     }
 }
 
-void DmMotorDriver::save_register_dm(uint8_t rid) {
+void DmMotorDriver::save_register_dm() {
     can_frame tx_frame;
     tx_frame.can_id = 0x7FF;
     tx_frame.can_dlc = 0x08;
@@ -369,7 +369,7 @@ void DmMotorDriver::save_register_dm(uint8_t rid) {
     tx_frame.data[0] = motor_id_ & 0xFF;
     tx_frame.data[1] = motor_id_ >> 8;
     tx_frame.data[2] = 0xAA;
-    tx_frame.data[3] = rid;
+    tx_frame.data[3] = 0x01;
 
     tx_frame.data[4] = 0xFF;
     tx_frame.data[5] = 0xFF;

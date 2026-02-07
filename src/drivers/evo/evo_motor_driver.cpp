@@ -136,6 +136,11 @@ void EvoMotorDriver::can_rx_cbk(const can_frame& rx_frame) {
     spd_int = rx_frame.data[3] << 4 | (rx_frame.data[4] & 0xF0) >> 4;
     t_int = (rx_frame.data[4] & 0x0F) << 8 | rx_frame.data[5];
     error_id_ = rx_frame.data[6];
+    if (error_id_ > 0) {
+        if (logger_) {
+            logger_->error("can_interface: {0}\tmotor_id: {1}\terror_id: 0x{2:x}", can_interface_, motor_id_, (uint32_t)error_id_);
+        }
+    }
     mos_temperature_ = rx_frame.data[7];
     
     motor_pos_ = range_map(pos_int, uint16_t(0), bitmax<uint16_t>(16), 
@@ -152,17 +157,14 @@ void EvoMotorDriver::get_motor_param(uint8_t param_cmd) {
     tx_frame.can_id = 0x600 + motor_id_;
     tx_frame.can_dlc = 0x08;
     
-    uint16_t index = 0x7000 + param_cmd;
-    uint8_t subindex = 0x00;
-    
-    tx_frame.data[0] = 0x40;
-    tx_frame.data[1] = index & 0xFF;
-    tx_frame.data[2] = (index >> 8) & 0xFF;
-    tx_frame.data[3] = subindex;
+    tx_frame.data[0] = 0x67;
+    tx_frame.data[1] = param_cmd;
+    tx_frame.data[2] = 0x00;
+    tx_frame.data[3] = 0x00;
     tx_frame.data[4] = 0x00;
     tx_frame.data[5] = 0x00;
-    tx_frame.data[6] = 0x00;
-    tx_frame.data[7] = 0x00;
+    tx_frame.data[6] = 0x04;
+    tx_frame.data[7] = 0x76;
     
     can_->transmit(tx_frame);
     {
@@ -222,7 +224,8 @@ void EvoMotorDriver::motor_mit_cmd(float f_p, float f_v, float f_kp, float f_kd,
 }
 
 void EvoMotorDriver::set_motor_control_mode(uint8_t motor_control_mode) {
-    motor_control_mode_ = MIT;
+    write_register_evo(11, 0x02);
+    motor_control_mode_ = motor_control_mode;
 }
 
 void EvoMotorDriver::set_motor_zero_evo() {
@@ -263,19 +266,22 @@ void EvoMotorDriver::clear_motor_error_evo() {
     }
 }
 
-void EvoMotorDriver::write_register_evo(uint16_t index, uint8_t subindex, int32_t value) {
+void EvoMotorDriver::write_register_evo(uint8_t index, int32_t value) {
     can_frame tx_frame;
     tx_frame.can_id = 0x600 + motor_id_;
     tx_frame.can_dlc = 0x08;
+
+    uint8_t* vbuf;
+    vbuf = (uint8_t*)&value;
     
-    tx_frame.data[0] = 0x23;
-    tx_frame.data[1] = index & 0xFF;
-    tx_frame.data[2] = (index >> 8) & 0xFF;
-    tx_frame.data[3] = subindex;
-    tx_frame.data[4] = value & 0xFF;
-    tx_frame.data[5] = (value >> 8) & 0xFF;
-    tx_frame.data[6] = (value >> 16) & 0xFF;
-    tx_frame.data[7] = (value >> 24) & 0xFF;
+    tx_frame.data[0] = 0x67;
+    tx_frame.data[1] = index;
+    tx_frame.data[2] = *vbuf;
+    tx_frame.data[3] = *(vbuf + 1);
+    tx_frame.data[4] = *(vbuf + 2);
+    tx_frame.data[5] = *(vbuf + 3);
+    tx_frame.data[6] = 0x15;
+    tx_frame.data[7] = 0x76;
     
     can_->transmit(tx_frame);
     {
@@ -283,40 +289,19 @@ void EvoMotorDriver::write_register_evo(uint16_t index, uint8_t subindex, int32_
     }
 }
 
-void EvoMotorDriver::read_register_evo(uint16_t index, uint8_t subindex) {
+void EvoMotorDriver::save_register_evo() {
     can_frame tx_frame;
     tx_frame.can_id = 0x600 + motor_id_;
     tx_frame.can_dlc = 0x08;
     
-    tx_frame.data[0] = 0x40;
-    tx_frame.data[1] = index & 0xFF;
-    tx_frame.data[2] = (index >> 8) & 0xFF;
-    tx_frame.data[3] = subindex;
+    tx_frame.data[0] = 0x67;
+    tx_frame.data[1] = 0x00;
+    tx_frame.data[2] = 0x00;
+    tx_frame.data[3] = 0x00;
     tx_frame.data[4] = 0x00;
     tx_frame.data[5] = 0x00;
     tx_frame.data[6] = 0x00;
-    tx_frame.data[7] = 0x00;
-    
-    can_->transmit(tx_frame);
-    {
-        response_count_++;
-    }
-}
-
-void EvoMotorDriver::save_register_evo(uint8_t rid) {
-    can_frame tx_frame;
-    tx_frame.can_id = 0x600 + motor_id_;
-    tx_frame.can_dlc = 0x08;
-    
-    tx_frame.data[0] = 0x2B;
-    tx_frame.data[1] = 0x10;
-    tx_frame.data[2] = 0x10;
-    tx_frame.data[3] = rid;
-    
-    tx_frame.data[4] = 0x73;
-    tx_frame.data[5] = 0x61;
-    tx_frame.data[6] = 0x76;
-    tx_frame.data[7] = 0x65;
+    tx_frame.data[7] = 0x76;
     
     can_->transmit(tx_frame);
     {
