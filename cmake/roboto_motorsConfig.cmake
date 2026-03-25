@@ -49,6 +49,11 @@ _add_imported_lib(evo_motors)
 add_library(roboto_motors::roboto_motors INTERFACE IMPORTED)
 
 target_include_directories(roboto_motors::roboto_motors INTERFACE ${RobotoMotors_INCLUDE_DIR})
-target_link_libraries(roboto_motors::roboto_motors INTERFACE ${RobotoMotors_LIBRARIES})
+target_link_libraries(roboto_motors::roboto_motors INTERFACE 
+    ${RobotoMotors_LIBRARIES}
+    fmt::fmt
+    spdlog::spdlog
+    Eigen3::Eigen
+)
 
 message(STATUS "Found RobotoMotors: ${_INSTALL_PREFIX}")
