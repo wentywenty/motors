@@ -5,6 +5,8 @@
 
 #include "motor_driver.hpp"
 #include "protocol/can/socket_can.hpp"
+#include "protocol/canfd/socket_canfd.hpp"
+
 enum EVOError {
     EVO_NO_ERROR = 0x00,
     EVO_OVER_VOLTAGE = 0x01,
@@ -19,13 +21,57 @@ enum EVOError {
 };
 
 enum EVO_Motor_Model { 
-    EVO431040 = 0,
-    EVO811825 = 1,
-    EVO811832 = 2,
-    EVO_Num_Of_Model 
+    EVO431040,
+    EVO811825,
+    EVO811832,
+    EVO_Num_Of_Motor 
 };
 
-enum EVO_REG {
+enum EVO_REG : uint8_t {
+    // --- System & Core Information ---
+    EVO_REG_FIRMWARE_VER    = 10,  // Firmware Version (Int32)
+    EVO_REG_MOTOR_ID        = 36,  // Motor CAN ID (Int32)
+    EVO_REG_NPP             = 44,  // Number of Pole Pairs (Int32)
+    EVO_REG_GEAR_RATIO      = 45,  // Gear Reduction Ratio (Float32)
+
+    // --- Current Loop Control (FOC) ---
+    EVO_REG_CUR_KP_D        = 12,  // D-axis Current Loop Kp (Float32)
+    EVO_REG_CUR_KI_D        = 13,  // D-axis Current Loop Ki (Float32)
+    EVO_REG_CUR_KP_Q        = 14,  // Q-axis Current Loop Kp (Float32)
+    EVO_REG_CUR_KI_Q        = 15,  // Q-axis Current Loop Ki (Float32)
+
+    // --- Control Deadzones ---
+    EVO_REG_DEADZONE_CUR    = 16,  // Current Deadzone (Float32)
+    EVO_REG_DEADZONE_VEL    = 17,  // Velocity Deadzone (Float32)
+    EVO_REG_DEADZONE_POS    = 18,  // Position Deadzone (Float32)
+
+    // --- Motion Dynamics & Limits ---
+    EVO_REG_TORQUE_LIMIT    = 21,  // Torque Protection Limit (Float32)
+    EVO_REG_ZERO_OFFSET     = 23,  // Mechanical Zero Offset (Float32)
+    EVO_REG_ACCELERATION    = 42,  // Servo Mode Acceleration (Float32)
+    EVO_REG_TORQUE_SLOPE    = 43,  // Torque Rise Rate / Slope (Float32)
+
+    // --- CAN Communication Range Config (CRITICAL for range_map alignment) ---
+    EVO_REG_CAN_THETA_MIN   = 24,  // Position Mapping Minimum (rad)
+    EVO_REG_CAN_THETA_MAX   = 25,  // Position Mapping Maximum (rad)
+    EVO_REG_CAN_VEL_MIN     = 26,  // Velocity Mapping Minimum (rad/s)
+    EVO_REG_CAN_VEL_MAX     = 27,  // Velocity Mapping Maximum (rad/s)
+    EVO_REG_CAN_KP_MAX      = 29,  // Kp Mapping Maximum Value
+    EVO_REG_CAN_KD_MAX      = 31,  // Kd Mapping Maximum Value
+    EVO_REG_CAN_TORQUE_MIN  = 34,  // Torque Mapping Minimum (Nm)
+    EVO_REG_CAN_TORQUE_MAX  = 35,  // Torque Mapping Maximum (Nm)
+    EVO_REG_CAN_TIMEOUT     = 37,  // CAN Communication Timeout Threshold (Int32/ms)
+
+    // --- Safety & Protection Thresholds ---
+    EVO_REG_OV_LOCK         = 49,  // Over-Voltage (Bus) Lockout (Float32)
+    EVO_REG_UV_LOCK         = 50,  // Under-Voltage (Bus) Lockout (Float32)
+    EVO_REG_OC_LOCK         = 51,  // Over-Current (Phase) Lockout (Float32)
+    EVO_REG_OT_LOCK         = 52,  // Over-Temperature (Board) Lockout (Float32)
+    EVO_REG_STUCK_TIME      = 55,  // Stall/Stuck Protection Time (Float32)
+    EVO_REG_PROTECT_SWITCH  = 56  // Protection Feature Switch Bits (Int32)
+};
+
+enum EVO_CMD {
     EVO_CMD_MOTOR_MODE = 0xFC,      ///< Enable motor mode
     EVO_CMD_RESET_MODE = 0xFD,      ///< Reset motor and clear errors
     EVO_CMD_SET_ZERO = 0xFE,        ///< Set current position as zero point
@@ -51,6 +97,12 @@ enum EVO_Flash_Param {
     EVO_PARAM_IKI_MIN = 0x0D,       ///< Minimum inner Ki
     EVO_PARAM_CUR_MAX = 0x0E,       ///< Maximum current
     EVO_PARAM_CUR_MIN = 0x0F        ///< Minimum current
+};
+
+// EVO-FD specific
+enum EVOFD_CMD : uint16_t {
+    EVOFD_CMD_ID = 0x10,
+    EVOFD_MIT_ID = 0x20
 };
 
 typedef struct {
@@ -85,16 +137,32 @@ class EvoMotorDriver : public MotorDriver {
     }
     virtual void refresh_motor_status() override;
     virtual void clear_motor_error() override;
+
+    virtual uint8_t get_command_size() override { return 8; }
+    virtual void pack_cmd_data(uint8_t* buffer) override;
+
    private:
+    uint8_t motor_index_{0};
+
+    std::atomic<float> target_pos_{0.0f};
+    std::atomic<float> target_spd_{0.0f};
+    std::atomic<float> target_kp_{0.0f};
+    std::atomic<float> target_kd_{0.0f};
+    std::atomic<float> target_trq_{0.0f};
+
     std::atomic<int> response_count_{0};
     EVO_Motor_Model motor_model_;
     EVO_Limit_Param limit_param_;
     std::atomic<uint8_t> mos_temperature_{0};
     void set_motor_zero_evo();
     void clear_motor_error_evo();
+    void write_register_evo(uint8_t rid, float value);
     void write_register_evo(uint8_t index, int32_t value);
     void save_register_evo();
+    
     virtual void can_rx_cbk(const can_frame& rx_frame);
+    virtual void canfd_rx_cbk(const canfd_frame& rx_frame);
     std::shared_ptr<MotorsSocketCAN> can_;
+    std::shared_ptr<MotorsSocketCANFD> canfd_;
     std::string can_interface_;
 };
