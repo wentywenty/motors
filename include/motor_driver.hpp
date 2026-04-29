@@ -157,6 +157,22 @@ class MotorDriver {
     virtual void motor_mit_cmd(float f_p, float f_v, float f_kp, float f_kd, float f_t) = 0;
 
     /**
+     * @brief Commands the motor to operate in impedance (MIT) mode using pointers/arrays.
+     *
+     * This overload is designed for efficient integration with multi-motor batch 
+     * processing or inference engines. It allows passing arrays/pointers of control 
+     * parameters. The specific hardware implementation handles how to extract and 
+     * pack these contiguous memory blocks into bus-specific payloads (e.g. One-to-Many).
+     *
+     * @param f_p  Pointer to the proportional target position (rad).
+     * @param f_v  Pointer to the target velocity (rad/s).
+     * @param f_kp Pointer to the proportional stiffness coefficient (Position gain).
+     * @param f_kd Pointer to the damping coefficient (Velocity gain).
+     * @param f_t  Pointer to the desired feed-forward torque value (Nm).
+     */
+    virtual void motor_mit_cmd(float* f_p, float* f_v, float* f_kp, float* f_kd, float* f_t) = 0;
+
+    /**
      * @brief Sets the control mode for the motor.
      *
      * This function specifies the control mode for the motor.
@@ -219,7 +235,7 @@ class MotorDriver {
      * * @note Depending on the implementation (e.g., EVO or LRO), this may require 
      * a subsequent call to write_motor_flash() to persist across power cycles.
      */
-    virtual void set_motor_id() = 0;
+    virtual void set_motor_id(uint8_t old_id, uint8_t new_id) = 0;
 
     /**
      * @brief Resets the motor's hardware ID to the factory default value.

@@ -72,12 +72,14 @@ enum EVO_REG : uint8_t {
 };
 
 enum EVO_CMD {
-    EVO_CMD_MOTOR_MODE = 0xFC,      ///< Enable motor mode
-    EVO_CMD_RESET_MODE = 0xFD,      ///< Reset motor and clear errors
+    EVO_CMD_ENABLE = 0xFC,      ///< Enable motor mode and reset motor state
+    EVO_CMD_DISABLE = 0xFD,      ///< Reset motor and clear errors
     EVO_CMD_SET_ZERO = 0xFE,        ///< Set current position as zero point
-    EVO_CMD_WRITE_FLASH = 0x12,     ///< Write parameter to flash memory
-    EVO_CMD_READ_FLASH = 0x13,      ///< Read parameters from flash memory
-    EVO_CMD_REBOOT = 0xFE           ///< Reboot motor (make flash parameters effective)
+    EVO_CMD_START_FLASH = 0x67,      ///< Start flash operation
+    EVO_CMD_END_FLASH = 0x76,      ///< End flash operation
+    EVO_CMD_READ_FLASH = 0x04,      ///< Read flash operation
+    EVO_CMD_WRITE_FLASH = 0x15,      ///< Write flash operation
+    EVO_CMD_SAVE_FLASH = 0x00      ///< Save flash operation
 };
 
 enum EVO_Flash_Param {
@@ -127,18 +129,18 @@ class EvoMotorDriver : public MotorDriver {
     virtual bool write_motor_flash() override;
     virtual void get_motor_param(uint8_t param_cmd) override;
     
-    virtual void motor_pos_cmd(float pos, float spd, bool ignore_limit) override {};
-    virtual void motor_spd_cmd(float spd) override {};
+    virtual void motor_pos_cmd(float pos, float spd, bool ignore_limit) override {}; //todo
+    virtual void motor_spd_cmd(float spd) override {}; //todo
     virtual void motor_mit_cmd(float f_p, float f_v, float f_kp, float f_kd, float f_t) override;
+    virtual void motor_mit_cmd(float* f_p, float* f_v, float* f_kp, float* f_kd, float* f_t) override;
     virtual void set_motor_control_mode(uint8_t motor_control_mode) override;
     virtual int get_response_count() const { 
         return response_count_; 
     }
+    virtual void set_motor_id(uint8_t old_id, uint8_t new_id) override {}; //todo
+    virtual void reset_motor_id() override {}; //todo
     virtual void refresh_motor_status() override;
     virtual void clear_motor_error() override;
-
-    virtual void set_motor_id() override {};
-    virtual void reset_motor_id() override {};
 
     virtual uint8_t get_command_size() override { return 8; }
     virtual void pack_cmd_data(uint8_t* buffer) override;

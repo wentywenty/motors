@@ -181,6 +181,8 @@ void LroMotorDriver::get_motor_param(uint8_t param_cmd) {
         tx_frame.data[1] = param_cmd; //// Query (mode 0x07) — request param/status
 
         canfd_->transmit(tx_frame);
+    } else if (comm_type_ == CommType::ETHERCAT) {
+        throw std::runtime_error("LRO driver does not support EtherCAT interface yet");
     }
     {
         response_count_++;
@@ -300,67 +302,68 @@ void LroMotorDriver::motor_mit_cmd(float f_p, float f_v, float f_kp, float f_kd,
         Timer::sleep_for(normal_sleep_time);
     }
     if (comm_type_ == CommType::CANFD) { 
+        f_p -= static_cast<float>(motor_zero_offset_);
+        f_p = limit(f_p, -limit_param_.PosMax, limit_param_.PosMax);
+        f_v = limit(f_v, -limit_param_.SpdMax, limit_param_.SpdMax);
+        f_kp = limit(f_kp, 0.0f, limit_param_.OKpMax);
+        f_kd = limit(f_kd, 0.0f, limit_param_.OKdMax);
+        f_t = limit(f_t, -limit_param_.TauMax, limit_param_.TauMax);
         target_pos_.store(f_p);
         target_spd_.store(f_v);
         target_kp_.store(f_kp);
         target_kd_.store(f_kd);
         target_trq_.store(f_t);
-        // f_p -= static_cast<float>(motor_zero_offset_);
-        // f_p = limit(f_p, -limit_param_.PosMax, limit_param_.PosMax);
-        // f_v = limit(f_v, -limit_param_.SpdMax, limit_param_.SpdMax);
-        // f_kp = limit(f_kp, 0.0f, limit_param_.KpMax);
-        // f_kd = limit(f_kd, 0.0f, limit_param_.KdMax);
-        // f_t = limit(f_t, -limit_param_.TorMax, limit_param_.TorMax);
 
-        // uint16_t kp = range_map(f_kp, 0.0f, limit_param_.KpMax, uint16_t(0), bitmax<uint16_t>(12));
-        // uint16_t kd = range_map(f_kd, 0.0f, limit_param_.KdMax, uint16_t(0), bitmax<uint16_t>(9));
-        // uint16_t pos = range_map(f_p, -limit_param_.PosMax, limit_param_.PosMax,
-        //                          uint16_t(0), bitmax<uint16_t>(16));
-        // uint16_t spd = range_map(f_v, -limit_param_.SpdMax, limit_param_.SpdMax,
-        //                          uint16_t(0), bitmax<uint16_t>(12));
-        // uint16_t tor = range_map(f_t, -limit_param_.TorMax, limit_param_.TorMax,
-        //                          uint16_t(0), bitmax<uint16_t>(12));
-        // // Pack into 8 bytes (big-endian bit order):
-        // // Byte0: mode[2:0] | KP[11:9]     -> (mode<<5) | (kp>>7)
-        // // Byte1: KP[8:1]                   -> (kp>>1) & 0xFF  [actually kp bits 8-1 => shift by... ]
-        // // Let's lay it out carefully:
-        // //
-        // // Bit63..61 = mode (3 bits)  = 0x00
-        // // Bit60..49 = KP (12 bits)
-        // // Bit48..40 = KD (9 bits)
-        // // Bit39..24 = POS (16 bits)
-        // // Bit23..12 = SPD (12 bits)
-        // // Bit11..0  = TOR (12 bits)
-        // //
-        // // Total = 3+12+9+16+12+12 = 64 bits = 8 bytes
-        // uint64_t packed = 0;
-        // packed |= (static_cast<uint64_t>(LRO_MODE_MIT & 0x07)) << 61;
-        // packed |= (static_cast<uint64_t>(kp & 0x0FFF)) << 49;
-        // packed |= (static_cast<uint64_t>(kd & 0x01FF)) << 40;
-        // packed |= (static_cast<uint64_t>(pos & 0xFFFF)) << 24;
-        // packed |= (static_cast<uint64_t>(spd & 0x0FFF)) << 12;
-        // packed |= (static_cast<uint64_t>(tor & 0x0FFF));
+        uint16_t kp = range_map(f_kp, 0.0f, limit_param_.OKpMax, uint16_t(0), bitmax<uint16_t>(12));
+        uint16_t kd = range_map(f_kd, 0.0f, limit_param_.OKdMax, uint16_t(0), bitmax<uint16_t>(9));
+        uint16_t pos = range_map(f_p, -limit_param_.PosMax, limit_param_.PosMax, uint16_t(0), bitmax<uint16_t>(16));
+        uint16_t spd = range_map(f_v, -limit_param_.SpdMax, limit_param_.SpdMax, uint16_t(0), bitmax<uint16_t>(12));
+        uint16_t tor = range_map(f_t, -limit_param_.TauMax, limit_param_.TauMax, uint16_t(0), bitmax<uint16_t>(12));
 
-        // canfd_frame tx_frame{};
-        // tx_frame.can_id = motor_id_;
-        // tx_frame.len = 0x08;
-        // tx_frame.flags = CANFD_BRS;
-        // tx_frame.data[0] = (packed >> 56) & 0xFF;
-        // tx_frame.data[1] = (packed >> 48) & 0xFF;
-        // tx_frame.data[2] = (packed >> 40) & 0xFF;
-        // tx_frame.data[3] = (packed >> 32) & 0xFF;
-        // tx_frame.data[4] = (packed >> 24) & 0xFF;
-        // tx_frame.data[5] = (packed >> 16) & 0xFF;
-        // tx_frame.data[6] = (packed >> 8) & 0xFF;
-        // tx_frame.data[7] = packed & 0xFF;
+        uint64_t packed = 0;
+        packed |= (static_cast<uint64_t>(LRO_MODE_MIT & 0x07)) << 61;
+        packed |= (static_cast<uint64_t>(kp & 0x0FFF)) << 49;
+        packed |= (static_cast<uint64_t>(kd & 0x01FF)) << 40;
+        packed |= (static_cast<uint64_t>(pos & 0xFFFF)) << 24;
+        packed |= (static_cast<uint64_t>(spd & 0x0FFF)) << 12;
+        packed |= static_cast<uint64_t>(tor & 0x0FFF);
 
-        // canfd_->transmit(tx_frame);
+        canfd_frame tx_frame{};
+        tx_frame.can_id = motor_id_;
+        tx_frame.len = 0x08;
+        tx_frame.flags = CANFD_BRS;
+        tx_frame.data[0] = (packed >> 56) & 0xFF;
+        tx_frame.data[1] = (packed >> 48) & 0xFF;
+        tx_frame.data[2] = (packed >> 40) & 0xFF;
+        tx_frame.data[3] = (packed >> 32) & 0xFF;
+        tx_frame.data[4] = (packed >> 24) & 0xFF;
+        tx_frame.data[5] = (packed >> 16) & 0xFF;
+        tx_frame.data[6] = (packed >> 8) & 0xFF;
+        tx_frame.data[7] = packed & 0xFF;
+
+        canfd_->transmit(tx_frame);
     } else if (comm_type_ == CommType::ETHERCAT) {
         throw std::runtime_error("LRO driver does not support EtherCAT interface yet");
     }
     {
         response_count_++;
     }
+}
+
+void LroMotorDriver::motor_mit_cmd(float* f_p, float* f_v, float* f_kp, float* f_kd, float* f_t) {
+    if (f_p && f_v && f_kp && f_kd && f_t) {
+        motor_mit_cmd(*f_p, *f_v, *f_kp, *f_kd, *f_t);
+    }
+}
+
+void LroMotorDriver::set_motor_control_mode(uint8_t motor_control_mode) {
+    motor_control_mode_ = motor_control_mode;
+    // LeadRobot doesn't need explicit mode switching;
+    // the mode is embedded in each control frame.
+}
+
+void LroMotorDriver::set_motor_id(uint8_t old_id, uint8_t new_id) {
+    // Implementation for setting motor ID
 }
 
 void LroMotorDriver::reset_motor_id() {
@@ -381,12 +384,6 @@ void LroMotorDriver::reset_motor_id() {
     {
         response_count_++;
     }
-}
-
-void LroMotorDriver::set_motor_control_mode(uint8_t motor_control_mode) {
-    motor_control_mode_ = motor_control_mode;
-    // LeadRobot doesn't need explicit mode switching;
-    // the mode is embedded in each control frame.
 }
 
 void LroMotorDriver::set_motor_zero_lro() {

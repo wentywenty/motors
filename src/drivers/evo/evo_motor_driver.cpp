@@ -24,6 +24,10 @@ EvoMotorDriver::EvoMotorDriver(uint16_t motor_id, const std::string& interface_t
         
         CanFdCbkFunc canfd_callback = std::bind(&EvoMotorDriver::canfd_rx_cbk, this, std::placeholders::_1);
         canfd_->add_canfd_callback(canfd_callback, motor_id_);
+        // {
+        //     std::lock_guard<std::mutex> lock(bus_registry_mutex_);
+        //     bus_registry_[can_interface_].push_back(this);
+        // }
     } else if (interface_type == "can") {
         comm_type_ = CommType::CAN;
         can_ = MotorsSocketCAN::get(can_interface);
@@ -36,6 +40,12 @@ EvoMotorDriver::EvoMotorDriver(uint16_t motor_id, const std::string& interface_t
 EvoMotorDriver::~EvoMotorDriver() { 
     if (comm_type_ == CommType::CANFD) {
         canfd_->remove_canfd_callback(motor_id_);
+        // std::lock_guard<std::mutex> lock(bus_registry_mutex_);
+        // auto& motors = bus_registry_[can_interface_];
+        // motors.erase(std::remove(motors.begin(), motors.end(), this), motors.end());
+        // if (motors.empty()) {
+        //     bus_registry_.erase(can_interface_);
+        // }
     } else if (comm_type_ == CommType::CAN) {
         can_->remove_can_callback(motor_id_);
     }
@@ -55,7 +65,7 @@ void EvoMotorDriver::lock_motor() {
         tx_frame.data[4] = 0xFF;
         tx_frame.data[5] = 0xFF;
         tx_frame.data[6] = 0xFF;
-        tx_frame.data[7] = 0xFC;
+        tx_frame.data[7] = EVO_CMD_ENABLE;
 
         canfd_->transmit(tx_frame);
     } else if (comm_type_ == CommType::CAN) {
@@ -70,7 +80,7 @@ void EvoMotorDriver::lock_motor() {
         tx_frame.data[4] = 0xFF;
         tx_frame.data[5] = 0xFF;
         tx_frame.data[6] = 0xFF;
-        tx_frame.data[7] = 0xFC;
+        tx_frame.data[7] = EVO_CMD_ENABLE;
 
         can_->transmit(tx_frame);
     }
@@ -93,7 +103,7 @@ void EvoMotorDriver::unlock_motor() {
         tx_frame.data[4] = 0xFF;
         tx_frame.data[5] = 0xFF;
         tx_frame.data[6] = 0xFF;
-        tx_frame.data[7] = 0xFD;
+        tx_frame.data[7] = EVO_CMD_DISABLE;
 
         canfd_->transmit(tx_frame);
     } else if (comm_type_ == CommType::CAN) {
@@ -108,7 +118,7 @@ void EvoMotorDriver::unlock_motor() {
         tx_frame.data[4] = 0xFF;
         tx_frame.data[5] = 0xFF;
         tx_frame.data[6] = 0xFF;
-        tx_frame.data[7] = 0xFD;
+        tx_frame.data[7] = EVO_CMD_DISABLE;
 
         can_->transmit(tx_frame);
     }
@@ -256,14 +266,14 @@ void EvoMotorDriver::get_motor_param(uint8_t param_cmd) {
         tx_frame.len = 0x08;
         tx_frame.flags = CANFD_BRS;
 
-        tx_frame.data[0] = 0x67;      // Frame Header
+        tx_frame.data[0] = EVO_CMD_START_FLASH;      // Frame Header
         tx_frame.data[1] = param_cmd; // Register Index
         tx_frame.data[2] = 0x00;
         tx_frame.data[3] = 0x00;
         tx_frame.data[4] = 0x00;
         tx_frame.data[5] = 0x00;
-        tx_frame.data[6] = 0x04;      // 0x04 denotes a "Read" operation
-        tx_frame.data[7] = 0x76;      // Frame Tail
+        tx_frame.data[6] = EVO_CMD_READ_FLASH;
+        tx_frame.data[7] = EVO_CMD_END_FLASH;      // Frame Tail
 
         canfd_->transmit(tx_frame);
     } else if (comm_type_ == CommType::CAN) {
@@ -271,14 +281,14 @@ void EvoMotorDriver::get_motor_param(uint8_t param_cmd) {
         tx_frame.can_id = 0x600 + motor_id_;
         tx_frame.can_dlc = 0x08;
         
-        tx_frame.data[0] = 0x67;
+        tx_frame.data[0] = EVO_CMD_START_FLASH;
         tx_frame.data[1] = param_cmd;
         tx_frame.data[2] = 0x00;
         tx_frame.data[3] = 0x00;
         tx_frame.data[4] = 0x00;
         tx_frame.data[5] = 0x00;
-        tx_frame.data[6] = 0x04;
-        tx_frame.data[7] = 0x76;
+        tx_frame.data[6] = EVO_CMD_READ_FLASH;
+        tx_frame.data[7] = EVO_CMD_END_FLASH;
         
         can_->transmit(tx_frame);
     }
@@ -359,6 +369,55 @@ void EvoMotorDriver::motor_mit_cmd(float f_p, float f_v, float f_kp, float f_kd,
     }
 }
 
+void EvoMotorDriver::motor_mit_cmd(float* f_p, float* f_v, float* f_kp, float* f_kd, float* f_t) {
+    if (!f_p || !f_v || !f_kp || !f_kd || !f_t) {
+        return;
+    }
+
+    if (comm_type_ != CommType::CANFD) {
+        motor_mit_cmd(*f_p, *f_v, *f_kp, *f_kd, *f_t);
+        return;
+    }
+
+    if (motor_control_mode_ != MIT) {
+        set_motor_control_mode(MIT);
+        return;
+    }
+
+    canfd_frame tx_frame{};
+    tx_frame.can_id = EVOFD_MIT_ID;
+    tx_frame.len = 64;
+    tx_frame.flags = CANFD_BRS;
+
+    for (uint8_t slot = 0; slot < 8; ++slot) {
+        pack_mit_slot(&tx_frame.data[slot * 8], 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                      limit_param_, 0.0);
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(bus_registry_mutex_);
+        auto it = bus_registry_.find(can_interface_);
+        if (it != bus_registry_.end()) {
+            for (EvoMotorDriver* motor : it->second) {
+                if (!motor || motor->motor_index_ >= 8) {
+                    continue;
+                }
+                const uint8_t slot = motor->motor_index_;
+                motor->target_pos_.store(f_p[slot]);
+                motor->target_spd_.store(f_v[slot]);
+                motor->target_kp_.store(f_kp[slot]);
+                motor->target_kd_.store(f_kd[slot]);
+                motor->target_trq_.store(f_t[slot]);
+                pack_mit_slot(&tx_frame.data[slot * 8], f_p[slot], f_v[slot], f_kp[slot], f_kd[slot], f_t[slot],
+                              motor->limit_param_, motor->motor_zero_offset_);
+                motor->response_count_++;
+            }
+        }
+    }
+
+    canfd_->transmit(tx_frame);
+}
+
 void EvoMotorDriver::set_motor_control_mode(uint8_t motor_control_mode) {
     if (comm_type_ == CommType::CAN) write_register_evo(11, 0x02);
     motor_control_mode_ = motor_control_mode;
@@ -378,7 +437,7 @@ void EvoMotorDriver::set_motor_zero_evo() {
         tx_frame.data[4] = 0xFF;
         tx_frame.data[5] = 0xFF;
         tx_frame.data[6] = 0xFF;
-        tx_frame.data[7] = 0xFE;
+        tx_frame.data[7] = EVO_CMD_SET_ZERO;
 
         canfd_->transmit(tx_frame);
     } else if (comm_type_ == CommType::CAN) {
@@ -393,7 +452,7 @@ void EvoMotorDriver::set_motor_zero_evo() {
         tx_frame.data[4] = 0xFF;
         tx_frame.data[5] = 0xFF;
         tx_frame.data[6] = 0xFF;
-        tx_frame.data[7] = 0xFE;
+        tx_frame.data[7] = EVO_CMD_SET_ZERO;
 
         can_->transmit(tx_frame);
     }
@@ -416,7 +475,7 @@ void EvoMotorDriver::clear_motor_error_evo() {
         tx_frame.data[4] = 0xFF;
         tx_frame.data[5] = 0xFF;
         tx_frame.data[6] = 0xFF;
-        tx_frame.data[7] = 0xFD;
+        tx_frame.data[7] = EVO_CMD_DISABLE;
 
         canfd_->transmit(tx_frame);
     } else if (comm_type_ == CommType::CAN) {
@@ -431,7 +490,7 @@ void EvoMotorDriver::clear_motor_error_evo() {
         tx_frame.data[4] = 0xFF;
         tx_frame.data[5] = 0xFF;
         tx_frame.data[6] = 0xFF;
-        tx_frame.data[7] = 0xFD;
+        tx_frame.data[7] = EVO_CMD_DISABLE;
 
         can_->transmit(tx_frame);
     }
@@ -455,14 +514,14 @@ void EvoMotorDriver::write_register_evo(uint8_t index, int32_t value) {
         tx_frame.flags = CANFD_BRS;
         
         uint8_t* vbuf = (uint8_t*)&value;
-        tx_frame.data[0] = 0x67;
+        tx_frame.data[0] = EVO_CMD_START_FLASH;
         tx_frame.data[1] = index;
         tx_frame.data[2] = vbuf[0];
         tx_frame.data[3] = vbuf[1];
         tx_frame.data[4] = vbuf[2];
         tx_frame.data[5] = vbuf[3];
-        tx_frame.data[6] = 0x15;
-        tx_frame.data[7] = 0x76;
+        tx_frame.data[6] = EVO_CMD_WRITE_FLASH;
+        tx_frame.data[7] = EVO_CMD_END_FLASH;
 
         canfd_->transmit(tx_frame);
     } else if (comm_type_ == CommType::CAN) {
@@ -470,14 +529,14 @@ void EvoMotorDriver::write_register_evo(uint8_t index, int32_t value) {
         tx_frame.can_id = 0x600 + motor_id_;
         tx_frame.can_dlc = 0x08;
 
-        tx_frame.data[0] = 0x67;
+        tx_frame.data[0] = EVO_CMD_START_FLASH;
         tx_frame.data[1] = index;
         tx_frame.data[2] = *vbuf;
         tx_frame.data[3] = *(vbuf + 1);
         tx_frame.data[4] = *(vbuf + 2);
         tx_frame.data[5] = *(vbuf + 3);
-        tx_frame.data[6] = 0x15;
-        tx_frame.data[7] = 0x76;
+        tx_frame.data[6] = EVO_CMD_WRITE_FLASH;
+        tx_frame.data[7] = EVO_CMD_END_FLASH;
 
         can_->transmit(tx_frame);
     }
@@ -489,20 +548,19 @@ void EvoMotorDriver::write_register_evo(uint8_t index, int32_t value) {
 void EvoMotorDriver::save_register_evo() {
     if (comm_type_ == CommType::CANFD) {
         canfd_frame tx_frame{};
-        tx_frame.can_id = EVOFD_CMD_ID;
-        tx_frame.len = 64;
+        tx_frame.can_id = 0x600 + motor_id_;
+        tx_frame.len = 0x08;
         tx_frame.flags = CANFD_BRS;
-        for (int i = 0; i < 64; i++) tx_frame.data[i] = 0xFF;
         
         int offset = motor_index_ * 8;
-        tx_frame.data[0] = 0x67; // EVO Header/Feature Byte
-        tx_frame.data[1] = 0x00; // 0x00 is typically the Save Instruction index
+        tx_frame.data[0] = EVO_CMD_START_FLASH;
+        tx_frame.data[1] = 0x00;
         tx_frame.data[2] = 0x00;
         tx_frame.data[3] = 0x00;
         tx_frame.data[4] = 0x00;
         tx_frame.data[5] = 0x00;
-        tx_frame.data[6] = 0x00;
-        tx_frame.data[7] = 0x76; // Tail/End Byte
+        tx_frame.data[6] = EVO_CMD_SAVE_FLASH;
+        tx_frame.data[7] = EVO_CMD_END_FLASH;
 
         canfd_->transmit(tx_frame);
     } else if (comm_type_ == CommType::CAN) {
@@ -510,14 +568,14 @@ void EvoMotorDriver::save_register_evo() {
         tx_frame.can_id = 0x600 + motor_id_;
         tx_frame.can_dlc = 0x08;
         
-        tx_frame.data[0] = 0x67;
+        tx_frame.data[0] = EVO_CMD_START_FLASH;
         tx_frame.data[1] = 0x00;
         tx_frame.data[2] = 0x00;
         tx_frame.data[3] = 0x00;
         tx_frame.data[4] = 0x00;
         tx_frame.data[5] = 0x00;
-        tx_frame.data[6] = 0x00;
-        tx_frame.data[7] = 0x76;
+        tx_frame.data[6] = EVO_CMD_SAVE_FLASH;
+        tx_frame.data[7] = EVO_CMD_END_FLASH;
 
         can_->transmit(tx_frame);
     }
@@ -540,7 +598,7 @@ void EvoMotorDriver::refresh_motor_status() {
         tx_frame.data[4] = 0xFF;
         tx_frame.data[5] = 0xFF;
         tx_frame.data[6] = 0xFF;
-        tx_frame.data[7] = 0xFC;
+        tx_frame.data[7] = EVO_CMD_ENABLE;
 
         canfd_->transmit(tx_frame);
     } else if (comm_type_ == CommType::CAN) {
@@ -555,7 +613,7 @@ void EvoMotorDriver::refresh_motor_status() {
         tx_frame.data[4] = 0xFF;
         tx_frame.data[5] = 0xFF;
         tx_frame.data[6] = 0xFF;
-        tx_frame.data[7] = 0xFC;
+        tx_frame.data[7] = EVO_CMD_ENABLE;
 
         can_->transmit(tx_frame);
     }

@@ -97,15 +97,15 @@ class DmMotorDriver : public MotorDriver {
     virtual void motor_pos_cmd(float pos, float spd, bool ignore_limit) override;
     virtual void motor_spd_cmd(float spd) override;
     virtual void motor_mit_cmd(float f_p, float f_v, float f_kp, float f_kd, float f_t) override;
+    virtual void motor_mit_cmd(float* f_p, float* f_v, float* f_kp, float* f_kd, float* f_t) override;
     virtual void set_motor_control_mode(uint8_t motor_control_mode) override;
     virtual int get_response_count() const {
         return response_count_;
     }
+    virtual void set_motor_id(uint8_t old_id, uint8_t new_id) override {};
+    virtual void reset_motor_id() override {};
     virtual void refresh_motor_status() override;
     virtual void clear_motor_error() override;
-
-    virtual void set_motor_id() override {};
-    virtual void reset_motor_id() override {};
 
    private:
     uint16_t master_id_;
@@ -120,6 +120,7 @@ class DmMotorDriver : public MotorDriver {
     void write_register_dm(uint8_t rid, float value);
     void write_register_dm(uint8_t rid, int32_t value);
     void save_register_dm();
+
     virtual void can_rx_cbk(const can_frame& rx_frame);
     virtual void canfd_rx_cbk(const canfd_frame& rx_frame);
     std::shared_ptr<MotorsSocketCAN> can_;

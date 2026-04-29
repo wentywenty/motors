@@ -105,18 +105,18 @@ class LroMotorDriver : public MotorDriver {
     virtual bool write_motor_flash() override;
     virtual void get_motor_param(uint8_t param_cmd) override;
 
-    virtual void motor_pos_cmd(float pos, float spd, bool ignore_limit) override {};
-    virtual void motor_spd_cmd(float spd) override {};
+    virtual void motor_pos_cmd(float pos, float spd, bool ignore_limit) override {}; //todo
+    virtual void motor_spd_cmd(float spd) override {}; //todo
     virtual void motor_mit_cmd(float f_p, float f_v, float f_kp, float f_kd, float f_t) override;
+    virtual void motor_mit_cmd(float* f_p, float* f_v, float* f_kp, float* f_kd, float* f_t) override;
     virtual void set_motor_control_mode(uint8_t motor_control_mode) override;
     virtual int get_response_count() const override { 
         return response_count_; 
     }
+    virtual void set_motor_id(uint8_t old_id, uint8_t new_id) override; //todo
+    virtual void reset_motor_id() override;
     virtual void refresh_motor_status() override;
     virtual void clear_motor_error() override;
-
-    virtual void set_motor_id() override {};
-    virtual void reset_motor_id() override;
 
     virtual uint8_t get_command_size() override { return 8; }
     virtual void pack_cmd_data(uint8_t* buffer) override;
@@ -143,5 +143,7 @@ class LroMotorDriver : public MotorDriver {
     void save_register_lro();
 
     virtual void canfd_rx_cbk(const canfd_frame& rx_frame);
+    // virtual void ethercat_rx_cbk(const ethercat_frame& rx_frame);
     std::shared_ptr<MotorsSocketCANFD> canfd_;
+    // std::shared_ptr<MotorsEthercat> ethercat_;
 };
