@@ -4,7 +4,8 @@
 #include <string>
 
 #include "motor_driver.hpp"
-#include "protocol/canfd/socket_canfd.hpp"
+#include "protocol/canfd_iso.hpp"
+// #include "protocol/ethercat_iso.hpp"
 
 // LeadRobot error codes (from type-1 feedback, 5-bit error field)
 enum LROError : uint8_t {
@@ -74,11 +75,32 @@ enum LROConfigCode : uint8_t {
     LRO_CFG_KT_CALIB    = 0x0F  // Set torque constant calibration
 };
 
-// Query codes for Mode 0x07.Used to retrieve real-time internal information from the motor.
+// Query codes for Mode 0x07. Used to retrieve real-time internal information from the motor.
 enum LROQueryCode : uint8_t {
-    LRO_QRY_FIRMWARE    = 0x0A,  // Query firmware version
-    LRO_QRY_HARDWARE    = 0x0B,  // Query hardware version
-    LRO_QRY_SERIAL_NUM  = 0x0C   // Query motor serial number
+    LRO_QRY_MANUFACTURER = 0x00,  // Manufacturer info (LeadRobot=3)
+    LRO_QRY_POS          = 0x01,  // Current position (degrees, float)
+    LRO_QRY_SPD          = 0x02,  // Current speed (RPM, float)
+    LRO_QRY_CUR          = 0x03,  // Current phase current (float)
+    LRO_QRY_POWER        = 0x04,  // Current power (float)
+    LRO_QRY_ACCEL        = 0x05,  // Current acceleration (uint16)
+    LRO_QRY_FLUX_GAIN    = 0x06,  // Magnetic flux observation gain
+    LRO_QRY_DIST_COMP    = 0x07,  // Disturbance compensation coefficient
+    LRO_QRY_FB_COMP      = 0x08,  // Feedback compensation coefficient
+    LRO_QRY_DAMPING      = 0x09,  // Damping coefficient
+    LRO_QRY_KT           = 0x16,  // Torque constant (uint16 * 100)
+    LRO_QRY_KP_RANGE     = 0x17,  // KP range (uint16 min + uint16 max)
+    LRO_QRY_KD_RANGE     = 0x18,  // KD range (uint16 min + uint16 max)
+    LRO_QRY_POS_RANGE    = 0x19,  // POS range (int16*100 + int16*100)
+    LRO_QRY_SPD_RANGE    = 0x1A,  // SPD range (int16*100 + int16*100)
+    LRO_QRY_TOR_RANGE    = 0x1B,  // TOR range (int16*10 + int16*10)
+    LRO_QRY_CUR_RANGE    = 0x1C,  // CUR range (int16*10 + int16*10)
+    LRO_QRY_MCU_UUID     = 0x1D,  // MCU UUID (3 frames)
+    LRO_QRY_VERSION      = 0x1E,  // Software & hardware version (12 bytes)
+    LRO_QRY_CAN_TIMEOUT  = 0x1F,  // CAN timeout (uint16 ms)
+    LRO_QRY_CUR_PI       = 0x20,  // Current loop KP/KI
+    LRO_QRY_SPD_PI       = 0x21,  // Speed loop KP/KI
+    LRO_QRY_POS_PD       = 0x22,  // Position loop KP/KD
+    LRO_QRY_KT_CALIB     = 0x23,  // Torque constant calibration enable
 };
 
 // Parameter ranges for MIT mode (configurable per motor)
@@ -105,33 +127,24 @@ class LroMotorDriver : public MotorDriver {
     virtual bool write_motor_flash() override;
     virtual void get_motor_param(uint8_t param_cmd) override;
 
-    virtual void motor_pos_cmd(float pos, float spd, bool ignore_limit) override {}; //todo
-    virtual void motor_spd_cmd(float spd) override {}; //todo
+    virtual void motor_pos_cmd(float pos, float spd, bool ignore_limit) override;
+    virtual void motor_spd_cmd(float spd) override;
     virtual void motor_mit_cmd(float f_p, float f_v, float f_kp, float f_kd, float f_t) override;
     virtual void motor_mit_cmd(float* f_p, float* f_v, float* f_kp, float* f_kd, float* f_t) override;
     virtual void set_motor_control_mode(uint8_t motor_control_mode) override;
     virtual int get_response_count() const override { 
         return response_count_; 
     }
-    virtual void set_motor_id(uint8_t old_id, uint8_t new_id) override; //todo
+    virtual void set_motor_id(uint8_t old_id, uint8_t new_id) override;
     virtual void reset_motor_id() override;
     virtual void refresh_motor_status() override;
     virtual void clear_motor_error() override;
-
-    virtual uint8_t get_command_size() override { return 8; }
-    virtual void pack_cmd_data(uint8_t* buffer) override;
 
    private:
     uint8_t motor_index_{0};
 
     // std::atomic<float> dc_bus_voltage_{0.f};
     // std::atomic<float> dc_bus_current_{0.f};
-    std::atomic<float> target_pos_{0.0f};
-    std::atomic<float> target_spd_{0.0f};
-    std::atomic<float> target_kp_{0.0f};
-    std::atomic<float> target_kd_{0.0f};
-    std::atomic<float> target_trq_{0.0f};
-    
     std::atomic<int> response_count_{0};
     LRO_Motor_Model motor_model_;
     LRO_Limit_Param limit_param_;
@@ -144,6 +157,9 @@ class LroMotorDriver : public MotorDriver {
 
     virtual void canfd_rx_cbk(const canfd_frame& rx_frame);
     // virtual void ethercat_rx_cbk(const ethercat_frame& rx_frame);
-    std::shared_ptr<MotorsSocketCANFD> canfd_;
+    std::shared_ptr<MotorsCANFD> canfd_;
     // std::shared_ptr<MotorsEthercat> ethercat_;
+
+    inline static std::mutex bus_registry_mutex_;
+    inline static std::unordered_map<std::string, std::vector<LroMotorDriver*>> bus_registry_;
 };

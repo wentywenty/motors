@@ -5,18 +5,33 @@
  */
 
 #include "socket_can.hpp"
+#include <spdlog/sinks/stdout_color_sinks.h>
 
-std::shared_ptr<spdlog::logger> MotorsSocketCAN::logger_ = nullptr;
+// MotorsCAN static members
+std::shared_ptr<MotorsCAN> MotorsCAN::get(const std::string& interface, const std::string& backend) {
+    ensure_logger();
+    if (backend == "socketcan") {
+        return MotorsSocketCAN::get(interface);
+    }
+    throw std::runtime_error("Unknown CAN backend: " + backend);
+}
+
+// MotorsSocketCAN static members
 std::unordered_map<std::string, std::shared_ptr<MotorsSocketCAN>> MotorsSocketCAN::instances_;
 
-MotorsSocketCAN::MotorsSocketCAN(std::string interface)
+std::shared_ptr<MotorsSocketCAN> MotorsSocketCAN::get(const std::string& interface) {
+    if (instances_.find(interface) == instances_.end()) instances_[interface] = createInstance(interface);
+    return instances_[interface];
+}
+
+MotorsSocketCAN::MotorsSocketCAN(const std::string& interface)
     : interface_(interface), sockfd_(INIT_FD), receiving_(false), tx_queue_(TX_QUEUE_SIZE) {
     open(interface);
 }
 
 MotorsSocketCAN::~MotorsSocketCAN() { this->close(); }
 
-void MotorsSocketCAN::open(std::string interface) {
+void MotorsSocketCAN::open(const std::string& interface) {
     sockfd_ = socket(PF_CAN, SOCK_RAW, CAN_RAW);
     if (sockfd_ == INIT_FD) {
         logger_->error("Failed to create CAN socket");
@@ -201,7 +216,7 @@ void MotorsSocketCAN::transmit(const can_frame &frame) {
     tx_cv_.notify_one();
 }
 
-void MotorsSocketCAN::add_can_callback(const CanCbkFunc callback, const CanCbkId id) {
+void MotorsSocketCAN::add_can_callback(const CanCbkFunc& callback, const CanCbkId id) {
     std::lock_guard<std::mutex> lock(can_callback_mutex_);
     can_callback_list_[id] = callback;
 }
@@ -216,7 +231,7 @@ void MotorsSocketCAN::clear_can_callbacks() {
     can_callback_list_.clear();
 }
 
-void MotorsSocketCAN::set_key_extractor(CanCbkKeyExtractor extractor) {
+void MotorsSocketCAN::set_can_key_extractor(CanCbkKeyExtractor extractor) {
     std::lock_guard<std::mutex> lock(can_callback_mutex_);
     key_extractor_ = std::move(extractor);
 }

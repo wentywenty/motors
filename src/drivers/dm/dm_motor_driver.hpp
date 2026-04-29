@@ -4,8 +4,9 @@
 #include <string>
 
 #include "motor_driver.hpp"
-#include "protocol/can/socket_can.hpp"
-#include "protocol/canfd/socket_canfd.hpp"
+#include "protocol/can_iso.hpp"
+#include "protocol/canfd_iso.hpp"
+
 enum DMError {
     DM_DOWN = 0x00,
     DM_UP = 0x01,
@@ -97,7 +98,7 @@ class DmMotorDriver : public MotorDriver {
     virtual void motor_pos_cmd(float pos, float spd, bool ignore_limit) override;
     virtual void motor_spd_cmd(float spd) override;
     virtual void motor_mit_cmd(float f_p, float f_v, float f_kp, float f_kd, float f_t) override;
-    virtual void motor_mit_cmd(float* f_p, float* f_v, float* f_kp, float* f_kd, float* f_t) override;
+    virtual void motor_mit_cmd(float* f_p, float* f_v, float* f_kp, float* f_kd, float* f_t) override {};
     virtual void set_motor_control_mode(uint8_t motor_control_mode) override;
     virtual int get_response_count() const {
         return response_count_;
@@ -123,6 +124,6 @@ class DmMotorDriver : public MotorDriver {
 
     virtual void can_rx_cbk(const can_frame& rx_frame);
     virtual void canfd_rx_cbk(const canfd_frame& rx_frame);
-    std::shared_ptr<MotorsSocketCAN> can_;
-    std::shared_ptr<MotorsSocketCANFD> canfd_;
+    std::shared_ptr<MotorsCAN> can_;
+    std::shared_ptr<MotorsCANFD> canfd_;
 };

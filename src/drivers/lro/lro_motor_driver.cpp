@@ -20,11 +20,13 @@ LroMotorDriver::LroMotorDriver(uint16_t motor_id, const std::string& interface_t
 
     if (interface_type == "canfd" || interface_type == "ethercanfd") {
         comm_type_ = CommType::CANFD;
-        motor_index_ = 0;
-        canfd_ = MotorsSocketCANFD::get(can_interface);
+        motor_index_ = (motor_id_ > 0 && motor_id_ <= 8) ? (motor_id_ - 1) : 0;
+        canfd_ = MotorsCANFD::get(can_interface);
 
         CanFdCbkFunc canfd_callback = std::bind(&LroMotorDriver::canfd_rx_cbk, this, std::placeholders::_1);
         canfd_->add_canfd_callback(canfd_callback, motor_id_);
+        std::lock_guard<std::mutex> lock(bus_registry_mutex_);
+        bus_registry_[can_interface].push_back(this);
     } else if (interface_type == "ethercat") {
         comm_type_ = CommType::ETHERCAT;
         throw std::runtime_error("LRO driver does not support EtherCAT interface yet");
@@ -34,6 +36,15 @@ LroMotorDriver::LroMotorDriver(uint16_t motor_id, const std::string& interface_t
 LroMotorDriver::~LroMotorDriver() {
     if (comm_type_ == CommType::CANFD) {
         canfd_->remove_canfd_callback(motor_id_);
+        std::lock_guard<std::mutex> lock(bus_registry_mutex_);
+        auto it = bus_registry_.find(can_interface_);
+        if (it != bus_registry_.end()) {
+            auto& motors = it->second;
+            motors.erase(std::remove(motors.begin(), motors.end(), this), motors.end());
+            if (motors.empty()) {
+                bus_registry_.erase(it);
+            }
+        }
     } else if (comm_type_ == CommType::ETHERCAT) {
         spdlog::error("LRO driver does not support EtherCAT interface yet");
     }
@@ -189,103 +200,84 @@ void LroMotorDriver::get_motor_param(uint8_t param_cmd) {
     }
 }
 
-// // ------------------------------------------------------------------
-// // Position control (mode 0x01)
-// // Protocol bit layout (8 bytes):
-// //   motor_mode    uint3   = 0x01
-// //   pos (degrees) float32
-// //   spd (0~32767) uint15  -> 0~3276.7 rpm, scale 10
-// //   cur_limit     uint12  -> 0~409.5A, scale 10
-// //   ack           uint2   -> 0=no reply, 1=type1, 2=type2, 3=type3
-// // ------------------------------------------------------------------
-// void LroMotorDriver::motor_pos_cmd(float pos, float spd, bool ignore_limit) {
-//     // Convert rad to degrees
-//     float pos_deg = (pos - static_cast<float>(motor_zero_offset_)) * 180.0f / static_cast<float>(M_PI);
-//     // Convert rad/s to rpm (0~3276.7 rpm)
-//     float spd_rpm = std::abs(spd) * 60.0f / (2.0f * static_cast<float>(M_PI));
-//     uint16_t spd_val = static_cast<uint16_t>(limit(spd_rpm * 10.0f, 0.0f, 32767.0f));
-//     uint16_t cur_limit = 4095;  // Max current, 409.5A
-//     uint8_t ack = 1;            // Request type-1 feedback
+void LroMotorDriver::motor_pos_cmd(float pos, float spd, bool ignore_limit) {
+    if (motor_control_mode_ != POS) {
+        set_motor_control_mode(POS);
+        return;
+    }
+    float pos_deg = (pos - static_cast<float>(motor_zero_offset_)) * 180.0f / static_cast<float>(M_PI);
+    float spd_rpm = std::abs(spd) * 60.0f / (2.0f * static_cast<float>(M_PI));
+    uint16_t spd_val = static_cast<uint16_t>(limit(spd_rpm * 10.0f, 0.0f, 32767.0f));
+    uint16_t cur_limit = 4095;
+    uint8_t ack = 1;
+    union32_t rv_type_convert;
+    rv_type_convert.f = pos_deg;
 
-//     // Float to bytes (big-endian)
-//     union32_t pos_union;
-//     pos_union.f = pos_deg;
+    if (comm_type_ == CommType::CANFD) {
+        canfd_frame tx_frame;
+        tx_frame.can_id = motor_id_;
+        tx_frame.len = 0x08;
+        tx_frame.flags = CANFD_BRS;
 
-//     canfd_frame tx_frame{};
-//     tx_frame.can_id = motor_id_;
-//     tx_frame.len = 0x08;
-//     tx_frame.flags = CANFD_BRS;
+        uint64_t packed = 0;
+        packed |= (static_cast<uint64_t>(LRO_MODE_POS & 0x07)) << 61;
+        packed |= (static_cast<uint64_t>(rv_type_convert.buf[3]) << 29) | (static_cast<uint64_t>(rv_type_convert.buf[2]) << 21)
+                 | (static_cast<uint64_t>(rv_type_convert.buf[1]) << 13) | (static_cast<uint64_t>(rv_type_convert.buf[0]) << 5);
+        packed |= (static_cast<uint64_t>(spd_val & 0x7FFF)) << 14;
+        packed |= (static_cast<uint64_t>(cur_limit & 0x0FFF)) << 2;
+        packed |= (static_cast<uint64_t>(ack & 0x03));
 
-//     // Byte0: mode[2:0](3bit) | pos_float[31:27](5bit, top 5 bits of float)
-//     // Actually the protocol says:
-//     //   motor_mode uint3 | pos float32 | spd uint15 | cur uint12 | ack uint2
-//     //   Total = 3 + 32 + 15 + 12 + 2 = 64 bits
-//     uint64_t packed = 0;
-//     packed |= (static_cast<uint64_t>(LRO_MODE_POS & 0x07)) << 61;
-//     packed |= (static_cast<uint64_t>(pos_union.u)) << 29;
-//     packed |= (static_cast<uint64_t>(spd_val & 0x7FFF)) << 14;
-//     packed |= (static_cast<uint64_t>(cur_limit & 0x0FFF)) << 2;
-//     packed |= (static_cast<uint64_t>(ack & 0x03));
+        for (int i = 0; i < 8; ++i) {
+            tx_frame.data[i] = (packed >> (56 - i * 8)) & 0xFF;
+        }
 
-//     tx_frame.data[0] = (packed >> 56) & 0xFF;
-//     tx_frame.data[1] = (packed >> 48) & 0xFF;
-//     tx_frame.data[2] = (packed >> 40) & 0xFF;
-//     tx_frame.data[3] = (packed >> 32) & 0xFF;
-//     tx_frame.data[4] = (packed >> 24) & 0xFF;
-//     tx_frame.data[5] = (packed >> 16) & 0xFF;
-//     tx_frame.data[6] = (packed >> 8) & 0xFF;
-//     tx_frame.data[7] = packed & 0xFF;
+        canfd_->transmit(tx_frame);
+    } else if (comm_type_ == CommType::ETHERCAT) {
+        throw std::runtime_error("LRO driver does not support EtherCAT interface yet");
+    }
+    {
+        response_count_++;
+    }
+}
 
-//     canfd_->transmit(tx_frame);
-//     {
-//         response_count_++;
-//     }
-// }
+void LroMotorDriver::motor_spd_cmd(float spd) {
+    if (motor_control_mode_ != SPD) {
+        set_motor_control_mode(SPD);
+        return;
+    }
+    float spd_rpm = spd * 60.0f / (2.0f * static_cast<float>(M_PI));
+    uint16_t cur_limit = 65535;
+    uint8_t ack = 1;
+    union32_t rv_type_convert;
+    rv_type_convert.f = spd_rpm;
 
-// // ------------------------------------------------------------------
-// // Speed control (mode 0x02)
-// // Protocol bit layout (8 bytes):
-// //   motor_mode       uint3  = 0x02
-// //   reserved_ctrl    uint3  = 0
-// //   ack              uint2
-// //   spd (rpm)        float32
-// //   cur_limit        uint16 -> 0~6553.6A, scale 10
-// // ------------------------------------------------------------------
-// void LroMotorDriver::motor_spd_cmd(float spd) {
-//     // Convert rad/s to rpm
-//     float spd_rpm = spd * 60.0f / (2.0f * static_cast<float>(M_PI));
-//     uint16_t cur_limit = 65535;  // Max current limit
-//     uint8_t ack = 1;             // Request type-1 feedback
+    if (comm_type_ == CommType::CANFD) {
+        canfd_frame tx_frame;
+        tx_frame.can_id = motor_id_;
+        tx_frame.len = 0x07;
+        tx_frame.flags = CANFD_BRS;
 
-//     union32_t spd_union;
-//     spd_union.f = spd_rpm;
+        tx_frame.data[0] = ((LRO_MODE_SPD & 0x07) << 5) | (ack & 0x03);
+        tx_frame.data[1] = rv_type_convert.buf[3];
+        tx_frame.data[2] = rv_type_convert.buf[2];
+        tx_frame.data[3] = rv_type_convert.buf[1];
+        tx_frame.data[4] = rv_type_convert.buf[0];
+        tx_frame.data[5] = (cur_limit >> 8) & 0xFF;
+        tx_frame.data[6] = cur_limit & 0xFF;
 
-//     canfd_frame tx_frame{};
-//     tx_frame.can_id = motor_id_;
-//     tx_frame.len = 0x08;
-//     tx_frame.flags = CANFD_BRS;
+        canfd_->transmit(tx_frame);
+    } else if (comm_type_ == CommType::ETHERCAT) {
+        throw std::runtime_error("LRO driver does not support EtherCAT interface yet");
+    }
+    {
+        response_count_++;
+    }
+}
 
-//     // Byte0: mode[2:0](3) | reserved(3) | ack(2)
-//     tx_frame.data[0] = ((LRO_MODE_SPD & 0x07) << 5) | (ack & 0x03);
-//     // Byte1~4: float32 speed (big-endian)
-//     tx_frame.data[1] = spd_union.buf[3];
-//     tx_frame.data[2] = spd_union.buf[2];
-//     tx_frame.data[3] = spd_union.buf[1];
-//     tx_frame.data[4] = spd_union.buf[0];
-//     // Byte5~6: current limit (uint16, big-endian)
-//     tx_frame.data[5] = (cur_limit >> 8) & 0xFF;
-//     tx_frame.data[6] = cur_limit & 0xFF;
-//     tx_frame.data[7] = 0x00;
-
-//     canfd_->transmit(tx_frame);
-//     {
-//         response_count_++;
-//     }
-// }
-
+// Transmit MIT-mDme control(hybrid) package. Called in canTask.
 // ------------------------------------------------------------------
 // MIT impedance control (mode 0x00)
-// Protocol bit layout (8 bytes, standard CAN, ID = motor_id):
+// Protocol bit layout (8 bytes, standard CAN, ID = motor_id:
 //   motor_mode  uint3   (bits 63-61)
 //   KP          uint12  (bits 60-49)
 //   KD          uint9   (bits 48-40)
@@ -294,44 +286,39 @@ void LroMotorDriver::get_motor_param(uint8_t param_cmd) {
 //   torque      uint12  (bits 11-0)
 // ------------------------------------------------------------------
 void LroMotorDriver::motor_mit_cmd(float f_p, float f_v, float f_kp, float f_kd, float f_t) {
-    // 1. Check control mode: switch to MIT mode if necessary
-    // Note: Mode switching is a low-frequency operation; independent packet transmission is safe.
     if (motor_control_mode_ != MIT) {
         set_motor_control_mode(MIT);
-        // Allow buffer time for motor internal logic to switch
         Timer::sleep_for(normal_sleep_time);
     }
-    if (comm_type_ == CommType::CANFD) { 
-        f_p -= static_cast<float>(motor_zero_offset_);
-        f_p = limit(f_p, -limit_param_.PosMax, limit_param_.PosMax);
-        f_v = limit(f_v, -limit_param_.SpdMax, limit_param_.SpdMax);
-        f_kp = limit(f_kp, 0.0f, limit_param_.OKpMax);
-        f_kd = limit(f_kd, 0.0f, limit_param_.OKdMax);
-        f_t = limit(f_t, -limit_param_.TauMax, limit_param_.TauMax);
-        target_pos_.store(f_p);
-        target_spd_.store(f_v);
-        target_kp_.store(f_kp);
-        target_kd_.store(f_kd);
-        target_trq_.store(f_t);
+    uint16_t p, v, kp, kd, t;
 
-        uint16_t kp = range_map(f_kp, 0.0f, limit_param_.OKpMax, uint16_t(0), bitmax<uint16_t>(12));
-        uint16_t kd = range_map(f_kd, 0.0f, limit_param_.OKdMax, uint16_t(0), bitmax<uint16_t>(9));
-        uint16_t pos = range_map(f_p, -limit_param_.PosMax, limit_param_.PosMax, uint16_t(0), bitmax<uint16_t>(16));
-        uint16_t spd = range_map(f_v, -limit_param_.SpdMax, limit_param_.SpdMax, uint16_t(0), bitmax<uint16_t>(12));
-        uint16_t tor = range_map(f_t, -limit_param_.TauMax, limit_param_.TauMax, uint16_t(0), bitmax<uint16_t>(12));
+    f_p -= static_cast<float>(motor_zero_offset_);
+    f_p = limit(f_p, -limit_param_.PosMax, limit_param_.PosMax);
+    f_v = limit(f_v, -limit_param_.SpdMax, limit_param_.SpdMax);
+    f_kp = limit(f_kp, 0.0f, limit_param_.OKpMax);
+    f_kd = limit(f_kd, 0.0f, limit_param_.OKdMax);
+    f_t = limit(f_t, -limit_param_.TauMax, limit_param_.TauMax);
+
+    p = range_map(f_p, -limit_param_.PosMax, limit_param_.PosMax, uint16_t(0), bitmax<uint16_t>(16));
+    v = range_map(f_v, -limit_param_.SpdMax, limit_param_.SpdMax, uint16_t(0), bitmax<uint16_t>(12));
+    kp = range_map(f_kp, 0.0f, limit_param_.OKpMax, uint16_t(0), bitmax<uint16_t>(12));
+    kd = range_map(f_kd, 0.0f, limit_param_.OKdMax, uint16_t(0), bitmax<uint16_t>(9));
+    t = range_map(f_t, -limit_param_.TauMax, limit_param_.TauMax, uint16_t(0), bitmax<uint16_t>(12));
+
+    if (comm_type_ == CommType::CANFD) {
+        canfd_frame tx_frame;
+        tx_frame.can_id = motor_id_;
+        tx_frame.len = 0x08;
+        tx_frame.flags = CANFD_BRS;
 
         uint64_t packed = 0;
         packed |= (static_cast<uint64_t>(LRO_MODE_MIT & 0x07)) << 61;
         packed |= (static_cast<uint64_t>(kp & 0x0FFF)) << 49;
         packed |= (static_cast<uint64_t>(kd & 0x01FF)) << 40;
-        packed |= (static_cast<uint64_t>(pos & 0xFFFF)) << 24;
-        packed |= (static_cast<uint64_t>(spd & 0x0FFF)) << 12;
-        packed |= static_cast<uint64_t>(tor & 0x0FFF);
+        packed |= (static_cast<uint64_t>(p & 0xFFFF)) << 24;
+        packed |= (static_cast<uint64_t>(v & 0x0FFF)) << 12;
+        packed |= static_cast<uint64_t>(t & 0x0FFF);
 
-        canfd_frame tx_frame{};
-        tx_frame.can_id = motor_id_;
-        tx_frame.len = 0x08;
-        tx_frame.flags = CANFD_BRS;
         tx_frame.data[0] = (packed >> 56) & 0xFF;
         tx_frame.data[1] = (packed >> 48) & 0xFF;
         tx_frame.data[2] = (packed >> 40) & 0xFF;
@@ -351,36 +338,163 @@ void LroMotorDriver::motor_mit_cmd(float f_p, float f_v, float f_kp, float f_kd,
 }
 
 void LroMotorDriver::motor_mit_cmd(float* f_p, float* f_v, float* f_kp, float* f_kd, float* f_t) {
-    if (f_p && f_v && f_kp && f_kd && f_t) {
-        motor_mit_cmd(*f_p, *f_v, *f_kp, *f_kd, *f_t);
+    if (!f_p || !f_v || !f_kp || !f_kd || !f_t) {
+        return;
+    }
+    if (comm_type_ != CommType::CANFD) {
+        if (comm_type_ == CommType::ETHERCAT) {
+            throw std::runtime_error("LRO driver does not support EtherCAT interface yet");
+        }
+        throw std::runtime_error("LRO multi-motor MIT mode only supports CANFD interface");
+    }
+    if (motor_control_mode_ != MIT) {
+        set_motor_control_mode(MIT);
+        Timer::sleep_for(normal_sleep_time);
+    }
+    canfd_frame tx_frame;
+    tx_frame.can_id = 0x8080 | CAN_EFF_FLAG;
+    tx_frame.len = 64;
+    tx_frame.flags = CANFD_BRS;
+
+    for (uint8_t slot = 0; slot < 8; ++slot) {
+        uint8_t* base = &tx_frame.data[slot * 8];
+        memset(base, 0, 8);
+        base[0] = (LRO_MODE_MIT & 0x07) << 5;
+    }
+
+    for (uint8_t slot = 0; slot < 8; ++slot) {
+
+        float p_f, v_f, kp_f, kd_f, t_f;
+        uint16_t p, v, kp, kd, t;
+
+        p_f = limit(f_p[slot] - static_cast<float>(motor_zero_offset_),
+                          -limit_param_.PosMax, limit_param_.PosMax);
+        v_f = limit(f_v[slot], -limit_param_.SpdMax, limit_param_.SpdMax);
+        kp_f = limit(f_kp[slot], 0.0f, limit_param_.OKpMax);
+        kd_f = limit(f_kd[slot], 0.0f, limit_param_.OKdMax);
+        t_f = limit(f_t[slot], -limit_param_.TauMax, limit_param_.TauMax);
+
+        kp = range_map(kp_f, 0.0f, limit_param_.OKpMax, uint16_t(0), uint16_t(0x0FFF));
+        kd = range_map(kd_f, 0.0f, limit_param_.OKdMax, uint16_t(0), uint16_t(0x01FF));
+        p = range_map(p_f, -limit_param_.PosMax, limit_param_.PosMax, uint16_t(0), uint16_t(0xFFFF));
+        v = range_map(v_f, -limit_param_.SpdMax, limit_param_.SpdMax, uint16_t(0), uint16_t(0x0FFF));
+        t = range_map(t_f, -limit_param_.TauMax, limit_param_.TauMax, uint16_t(0), uint16_t(0x0FFF));
+
+        uint64_t packed = 0;
+        packed |= (static_cast<uint64_t>(LRO_MODE_MIT & 0x07)) << 61;
+        packed |= (static_cast<uint64_t>(kp & 0x0FFF)) << 49;
+        packed |= (static_cast<uint64_t>(kd & 0x01FF)) << 40;
+        packed |= (static_cast<uint64_t>(p & 0xFFFF)) << 24;
+        packed |= (static_cast<uint64_t>(v & 0x0FFF)) << 12;
+        packed |= static_cast<uint64_t>(t & 0x0FFF);
+
+        uint8_t* base = &tx_frame.data[slot * 8];
+        base[0] = (packed >> 56) & 0xFF;
+        base[1] = (packed >> 48) & 0xFF;
+        base[2] = (packed >> 40) & 0xFF;
+        base[3] = (packed >> 32) & 0xFF;
+        base[4] = (packed >> 24) & 0xFF;
+        base[5] = (packed >> 16) & 0xFF;
+        base[6] = (packed >> 8) & 0xFF;
+        base[7] = packed & 0xFF;
+    }
+
+    canfd_->transmit(tx_frame);
+    {
+        response_count_++;
     }
 }
 
 void LroMotorDriver::set_motor_control_mode(uint8_t motor_control_mode) {
+    // 1. Parameter Validation
+    if (motor_control_mode > LRO_MODE_CUR) {
+        logger_->error("Invalid motor control mode: {} (ID: {})", motor_control_mode, motor_id_);
+        return;
+    }
+
+    // 2. State Logging
+    uint8_t old_mode = motor_control_mode_;
+    logger_->info("Switching motor control mode: {} -> {} (ID: {})", old_mode, motor_control_mode, motor_id_);
+
+    // 3. Special Handling: Non-MIT to MIT Transition
+    // Send a zero command to prevent jumps when entering impedance mode
+    if (motor_control_mode == LRO_MODE_MIT && old_mode != LRO_MODE_MIT) {
+        logger_->debug("Sending zero MIT command to synchronize mode (ID: {})", motor_id_);
+        
+        // Command: pos=0, spd=0, kp=0, kd=0, torque=0
+        motor_mit_cmd(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+        Timer::sleep_for(normal_sleep_time);
+    }
+
+    // 4. Update Internal State
     motor_control_mode_ = motor_control_mode;
-    // LeadRobot doesn't need explicit mode switching;
-    // the mode is embedded in each control frame.
+
+    // 5. Warning for Experimental Modes
+    if (motor_control_mode != LRO_MODE_MIT && motor_control_mode != 0x00) {
+        logger_->warn("Mode {} is not fully tested; MIT mode is recommended for LRO series", motor_control_mode);
+    }
 }
 
 void LroMotorDriver::set_motor_id(uint8_t old_id, uint8_t new_id) {
-    // Implementation for setting motor ID
+    // Parameter Validation: LRO supports IDs from 1 to 0x7FF
+    if (old_id < 1 || old_id > 0x7FF || new_id < 1 || new_id > 0x7FF) {
+        logger_->error("Invalid ID range: old={}, new={}", old_id, new_id);
+        return;
+    }
+
+    if (old_id == new_id) {
+        logger_->warn("Skipping ID set: Old and New ID are identical ({})", old_id);
+        return;
+    }
+
+    logger_->info("Changing Motor ID: {} -> {} (Interface: {})", old_id, new_id, can_interface_);
+
+    if (comm_type_ == CommType::CANFD) {
+        canfd_frame tx_frame{};
+        tx_frame.can_id = 0x7FF; // Dedicated Configuration ID
+        tx_frame.len = 0x06;
+        tx_frame.flags = CANFD_BRS;
+
+        // Populate Protocol Message
+        tx_frame.data[0] = (old_id >> 8) & 0xFF;   // Old ID High Byte
+        tx_frame.data[1] = old_id & 0xFF;          // Old ID Low Byte
+        tx_frame.data[2] = 0x00;                   // Direction: Master -> Slave
+        tx_frame.data[3] = LRO_CMD_SET_ID;         // Command: 0x04
+        tx_frame.data[4] = (new_id >> 8) & 0xFF;   // New ID High Byte
+        tx_frame.data[5] = new_id & 0xFF;          // New ID Low Byte
+
+        canfd_->transmit(tx_frame);
+        {
+            response_count_++;
+        }
+
+        // Allow buffer time for Flash write persistence
+        Timer::sleep_for(setup_sleep_time);
+        logger_->info("Set ID command sent. Verify the new ID via bus query.");
+    } else if (comm_type_ == CommType::ETHERCAT) {
+        throw std::runtime_error("LRO driver does not support EtherCAT interface yet");
+    }
 }
 
 void LroMotorDriver::reset_motor_id() {
-    // Reset all motors on the bus to ID 0x01
-    canfd_frame tx_frame{};
-    tx_frame.can_id = 0x7FF;
-    tx_frame.len = 0x06;
-    tx_frame.flags = CANFD_BRS;
+    if (comm_type_ == CommType::CANFD) {
+        // Reset all motors on the bus to ID 0x01
+        canfd_frame tx_frame{};
+        tx_frame.can_id = 0x7FF;
+        tx_frame.len = 0x06;
+        tx_frame.flags = CANFD_BRS;
 
-    tx_frame.data[0] = 0x7F;
-    tx_frame.data[1] = 0x7F;
-    tx_frame.data[2] = 0x00;
-    tx_frame.data[3] = LRO_CMD_RESET_ID;
-    tx_frame.data[4] = 0x7F;
-    tx_frame.data[5] = 0x7F;
+        tx_frame.data[0] = 0x7F;
+        tx_frame.data[1] = 0x7F;
+        tx_frame.data[2] = 0x00;
+        tx_frame.data[3] = LRO_CMD_RESET_ID;
+        tx_frame.data[4] = 0x7F;
+        tx_frame.data[5] = 0x7F;
 
-    canfd_->transmit(tx_frame);
+        canfd_->transmit(tx_frame);
+    } else if (comm_type_ == CommType::ETHERCAT) {
+        throw std::runtime_error("LRO driver does not support EtherCAT interface yet");
+    }
     {
         response_count_++;
     }
@@ -448,10 +562,30 @@ void LroMotorDriver::clear_motor_error_lro() {
     }
 }
 
-// void EvoMotorDriver::write_register_evo(uint8_t rid, float value){
-//     // Evo motor doesn't have a generic register write command;
-//     // parameters are set via specific control commands.
-// }
+void LroMotorDriver::write_register_lro(uint8_t rid, float value) {
+    uint8_t* vbuf = reinterpret_cast<uint8_t*>(&value);
+
+    if (comm_type_ == CommType::CANFD) {
+        canfd_frame tx_frame{};
+        tx_frame.can_id = motor_id_;
+        tx_frame.len = 0x06;
+        tx_frame.flags = CANFD_BRS;
+
+        tx_frame.data[0] = (LRO_MODE_CONFIG << 5);
+        tx_frame.data[1] = rid;
+        tx_frame.data[2] = vbuf[0];
+        tx_frame.data[3] = vbuf[1];
+        tx_frame.data[4] = vbuf[2];
+        tx_frame.data[5] = vbuf[3];
+
+        canfd_->transmit(tx_frame);
+    } else if (comm_type_ == CommType::ETHERCAT) {
+        throw std::runtime_error("LRO driver does not support EtherCAT interface yet");
+    }
+    {
+        response_count_++;
+    }
+}
 
 void LroMotorDriver::write_register_lro(uint8_t index, int32_t value) {
     if (comm_type_ == CommType::CANFD) {
@@ -477,21 +611,10 @@ void LroMotorDriver::write_register_lro(uint8_t index, int32_t value) {
 }
 
 void LroMotorDriver::save_register_lro() {
-    if (comm_type_ == CommType::CANFD) {
-        canfd_frame tx_frame{};
-        tx_frame.can_id = 0x7FF; // ID: Uses the dedicated global configuration identifier 0x7FF
-        tx_frame.len = 0x04;
-        tx_frame.flags = CANFD_BRS;
-
-        // Byte 0-1: Target Motor ID (Big-Endian)
-        tx_frame.data[0] = (uint8_t)((motor_id_ >> 8) & 0xFF);
-        tx_frame.data[1] = (uint8_t)(motor_id_ & 0xFF);
-        tx_frame.data[2] = 0x00; // Byte 2: Communication Direction (0x00 represents Controller to Motor)
-        tx_frame.data[3] = 0x04; // Byte 3: Command Code (LRO protocol defines 0x04 as "Save Parameters to Flash")
-
-        canfd_->transmit(tx_frame);
-    }
-    response_count_++;
+    // LRO protocol has no dedicated "save to flash" command.
+    // Parameters are saved automatically on config write (section 3.2).
+    // The previous implementation incorrectly sent 0x04 (set motor ID).
+    logger_->warn("save_register_lro: LRO protocol has no explicit save command, parameters are auto-saved on write");
 }
 
 void LroMotorDriver::refresh_motor_status() {
@@ -502,150 +625,3 @@ void LroMotorDriver::refresh_motor_status() {
 void LroMotorDriver::clear_motor_error() {
     clear_motor_error_lro();
 }
-
-void LroMotorDriver::pack_cmd_data(uint8_t* buffer) {
-    float f_p, f_v, f_kp, f_kd, f_t;
-    uint16_t p, v, kp, kd, t;
-
-    f_p = limit(target_pos_.load(), -limit_param_.PosMax, limit_param_.PosMax);
-    f_v = limit(target_spd_.load(), -limit_param_.SpdMax, limit_param_.SpdMax);
-    f_kp = limit(target_kp_.load(), 0.0f, limit_param_.OKpMax);
-    f_kd = limit(target_kd_.load(), 0.0f, limit_param_.OKdMax);
-    f_t = limit(target_trq_.load(), -limit_param_.TauMax, limit_param_.TauMax);
-
-    p = range_map(f_p, -limit_param_.PosMax, limit_param_.PosMax, uint16_t(0), bitmax<uint16_t>(16));
-    v = range_map(f_v, -limit_param_.SpdMax, limit_param_.SpdMax, uint16_t(0), bitmax<uint16_t>(12));
-    kp  = range_map(f_kp, 0.0f, limit_param_.OKpMax, uint16_t(0), bitmax<uint16_t>(12));
-    kd  = range_map(f_kd, 0.0f, limit_param_.OKdMax, uint16_t(0), bitmax<uint16_t>(9));
-    t = range_map(f_t, -limit_param_.TauMax, limit_param_.TauMax, uint16_t(0), bitmax<uint16_t>(12));
-
-    // 3. Fill the buffer according to LRO protocol bitfields (Big-Endian)
-    // Layout: Mode[3] + ID[5] + KP[12] + KD[9] + POS[16] + SPD[12] + TOR[12] = 64 bits total
-    // Byte 0: Mode(3 bits) + Motor_ID(5 bits)
-    buffer[0] = (uint8_t)(((LRO_MODE_MIT & 0x07) << 5) | (motor_id_ & 0x1F));
-    
-    // Byte 1: KP[11:4](8 bits)
-    buffer[1] = (uint8_t)((kp >> 4) & 0xFF);
-    
-    // Byte 2: KP[3:0](4 bits) + KD[8:5](4 bits)
-    buffer[2] = (uint8_t)(((kp & 0x0F) << 4) | ((kd >> 5) & 0x0F));
-
-    // Byte 3: KD[4:0](5 bits) + POS[15:13](3 bits)
-    buffer[3] = (uint8_t)(((kd & 0x1F) << 3) | ((p >> 13) & 0x07));
-    
-    // Byte 4: POS[7:0](8 bits)
-    buffer[4] = (uint8_t)(p & 0xFF);
-    
-    // Byte 5: SPD[11:4](8 bits)
-    buffer[5] = (uint8_t)((v >> 4) & 0xFF);
-    
-    // Byte 6: SPD[3:0](4 bits) + TOR[11:8](4 bits)
-    buffer[6] = (uint8_t)(((v & 0x0F) << 4) | ((t >> 8) & 0x0F));
-    
-    // Byte 7: TOR[7:0](8 bits)
-    buffer[7] = (uint8_t)(t & 0xFF);
-}
-
-// // ------------------------------------------------------------------
-// // 0x7FF setup commands
-// // ------------------------------------------------------------------
-// void LroMotorDriver::send_setup_cmd(uint8_t cmd_code) {
-//     canfd_frame tx_frame{};
-//     tx_frame.can_id = 0x7FF;
-//     tx_frame.len = 0x04;
-//     tx_frame.flags = CANFD_BRS;
-
-//     tx_frame.data[0] = (motor_id_ >> 8) & 0xFF;   // motor ID high
-//     tx_frame.data[1] = motor_id_ & 0xFF;           // motor ID low
-//     tx_frame.data[2] = 0x00;                       // 0x00 = from controller
-//     tx_frame.data[3] = cmd_code;
-
-//     canfd_->transmit(tx_frame);
-//     response_count_++;
-// }
-
-    // switch (fb_type) {
-    //     case LRO_FB_TYPE1: {
-    //         // Type 1: bit-packed feedback
-    //         // Byte0[7:5]=type, Byte0[4:0]=error
-    //         // Byte1~2: position (uint16)
-    //         // Byte3[7:4]~Byte4: speed (uint12)
-    //         // Byte4[3:0]~Byte5: iq current (uint12)
-    //         // Byte6: motor temperature (uint8, actual = value - 25)
-    //         // Byte7: MOS temperature (uint8, actual = value - 25)
-    //         // Byte8~9: DC bus voltage (uint16)
-    //         // Byte10~11: DC bus current (uint16)
-    //         if (rx_frame.len >= 8) {
-    //             uint16_t pos_raw = (static_cast<uint16_t>(rx_frame.data[1]) << 8) | rx_frame.data[2];
-    //             uint16_t spd_raw = (static_cast<uint16_t>(rx_frame.data[3]) << 4) |
-    //                                ((rx_frame.data[4] >> 4) & 0x0F);
-    //             uint16_t iq_raw = (static_cast<uint16_t>(rx_frame.data[4] & 0x0F) << 8) |
-    //                               rx_frame.data[5];
-    //             // // DC bus voltage/current (bytes 8~11, present when DLC >= 12)
-    //             // if (rx_frame.len >= 12) {
-    //             //     uint16_t dc_vol_raw = (static_cast<uint16_t>(rx_frame.data[8]) << 8) | rx_frame.data[9];
-    //             //     uint16_t dc_cur_raw = (static_cast<uint16_t>(rx_frame.data[10]) << 8) | rx_frame.data[11];
-    //             //     dc_bus_voltage_ = range_map(dc_vol_raw, uint16_t(0), bitmax<uint16_t>(16),
-    //             //                                 0.0f, 100.0f);
-    //             //     dc_bus_current_ = range_map(dc_cur_raw, uint16_t(0), bitmax<uint16_t>(16),
-    //             //                                 -100.0f, 100.0f);
-    //             // }
-    //             motor_pos_ = 
-    //                 range_map(pos_raw, uint16_t(0), bitmax<uint16_t>(16), -limit_param_.PosMax, limit_param_.PosMax) + static_cast<float>(motor_zero_offset_);
-    //             motor_spd_ = 
-    //                 range_map(spd_raw, uint16_t(0), bitmax<uint16_t>(12), -limit_param_.SpdMax, limit_param_.SpdMax);
-    //             motor_current_ = 
-    //                 range_map(iq_raw, uint16_t(0), bitmax<uint16_t>(12), -limit_param_.CurMax, limit_param_.CurMax);
-    //             mos_temperature_ = rx_frame.data[7];
-    //             motor_temperature_ = static_cast<float>(static_cast<int>(rx_frame.data[6]) - 25); // Temperature: value - 25 = actual temperature
-    //         }
-    //         break;
-    //     }
-    //     // case LRO_FB_TYPE2: {
-    //     //     // Type 2: float position + int16 current + uint8 temperature
-    //     //     if (rx_frame.len >= 8) {
-    //     //         union32_t pos_union;
-    //     //         pos_union.buf[3] = rx_frame.data[1];
-    //     //         pos_union.buf[2] = rx_frame.data[2];
-    //     //         pos_union.buf[1] = rx_frame.data[3];
-    //     //         pos_union.buf[0] = rx_frame.data[4];
-    //     //         // Position in degrees, convert to rad
-    //     //         motor_pos_ = pos_union.f * static_cast<float>(M_PI) / 180.0f +
-    //     //                      static_cast<float>(motor_zero_offset_);
-
-    //     //         int16_t cur_raw = (static_cast<int16_t>(rx_frame.data[5]) << 8) | rx_frame.data[6];
-    //     //         motor_current_ = static_cast<float>(cur_raw) / 100.0f;  // -327.68~327.67A
-    //     //         motor_temperature_ = static_cast<float>(static_cast<int>(rx_frame.data[7]) - 25);
-    //     //     }
-    //     //     break;
-    //     // }
-    //     // case LRO_FB_TYPE3: {
-    //     //     // Type 3: float speed + int16 current + uint8 temperature
-    //     //     if (rx_frame.len >= 8) {
-    //     //         union32_t spd_union;
-    //     //         spd_union.buf[3] = rx_frame.data[1];
-    //     //         spd_union.buf[2] = rx_frame.data[2];
-    //     //         spd_union.buf[1] = rx_frame.data[3];
-    //     //         spd_union.buf[0] = rx_frame.data[4];
-    //     //         // Speed in RPM, convert to rad/s
-    //     //         motor_spd_ = spd_union.f * 2.0f * static_cast<float>(M_PI) / 60.0f;
-
-    //     //         int16_t cur_raw = (static_cast<int16_t>(rx_frame.data[5]) << 8) | rx_frame.data[6];
-    //     //         motor_current_ = static_cast<float>(cur_raw) / 100.0f;
-    //     //         motor_temperature_ = static_cast<float>(static_cast<int>(rx_frame.data[7]) - 25);
-    //     //     }
-    //     //     break;
-    //     // }
-    //     // case LRO_FB_TYPE4: {
-    //     //     // Type 4: config result
-    //     //     // data[1] = config code, data[2] = 0(fail)/1(success)
-    //     //     break;
-    //     // }
-    //     // case LRO_FB_TYPE5: {
-    //     //     // Type 5: query result
-    //     //     // data[1] = query code, data[2..] = query data
-    //     //     break;
-    //     // }
-    //     default:
-    //         break;
-    // }

@@ -20,13 +20,13 @@ DmMotorDriver::DmMotorDriver(uint16_t motor_id, const std::string& interface_typ
 
     if (interface_type == "canfd" || interface_type == "ethercanfd") {
         comm_type_ = CommType::CANFD;
-        canfd_ = MotorsSocketCANFD::get(can_interface);
+        canfd_ = MotorsCANFD::get(can_interface);
 
         CanFdCbkFunc canfd_callback = std::bind(&DmMotorDriver::canfd_rx_cbk, this, std::placeholders::_1);
         canfd_->add_canfd_callback(canfd_callback, master_id_);
     } else if (interface_type == "can"){
         comm_type_ = CommType::CAN;
-        can_ = MotorsSocketCAN::get(can_interface);
+        can_ = MotorsCAN::get(can_interface);
 
         CanCbkFunc can_callback = std::bind(&DmMotorDriver::can_rx_cbk, this, std::placeholders::_1);
         can_->add_can_callback(can_callback, master_id_);

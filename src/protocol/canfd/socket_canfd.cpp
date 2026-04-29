@@ -5,18 +5,33 @@
  */
 
 #include "socket_canfd.hpp"
+#include <spdlog/sinks/stdout_color_sinks.h>
 
-std::shared_ptr<spdlog::logger> MotorsSocketCANFD::logger_ = nullptr;
+// MotorsCANFD static members
+std::shared_ptr<MotorsCANFD> MotorsCANFD::get(const std::string& interface, const std::string& backend) {
+    ensure_logger();
+    if (backend == "socketcan") {
+        return MotorsSocketCANFD::get(interface);
+    }
+    throw std::runtime_error("Unknown CANFD backend: " + backend);
+}
+
+// MotorsSocketCANFD static members
 std::unordered_map<std::string, std::shared_ptr<MotorsSocketCANFD>> MotorsSocketCANFD::instances_;
 
-MotorsSocketCANFD::MotorsSocketCANFD(std::string interface)
+std::shared_ptr<MotorsSocketCANFD> MotorsSocketCANFD::get(const std::string& interface) {
+    if (instances_.find(interface) == instances_.end()) instances_[interface] = createInstance(interface);
+    return instances_[interface];
+}
+
+MotorsSocketCANFD::MotorsSocketCANFD(const std::string& interface)
     : interface_(interface), sockfd_(FD_INIT_FD), receiving_(false), tx_queue_(FD_TX_QUEUE_SIZE) {
     open(interface);
 }
 
 MotorsSocketCANFD::~MotorsSocketCANFD() { this->close(); }
 
-void MotorsSocketCANFD::open(std::string interface) {
+void MotorsSocketCANFD::open(const std::string& interface) {
     sockfd_ = socket(PF_CAN, SOCK_RAW, CAN_RAW);
     if (sockfd_ == FD_INIT_FD) {
         logger_->error("Failed to create CAN socket");
@@ -208,7 +223,7 @@ void MotorsSocketCANFD::transmit(const canfd_frame &frame) {
     tx_cv_.notify_one();
 }
 
-void MotorsSocketCANFD::add_canfd_callback(const CanFdCbkFunc callback, const CanFdCbkId id) {
+void MotorsSocketCANFD::add_canfd_callback(const CanFdCbkFunc& callback, const CanFdCbkId id) {
     std::lock_guard<std::mutex> lock(canfd_callback_mutex_);
     canfd_callback_list_[id] = callback;
 }

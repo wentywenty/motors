@@ -7,7 +7,9 @@
 #include <cmath>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "utils.hpp"
@@ -245,16 +247,6 @@ class MotorDriver {
      * configuration errors during maintenance.
      */
     virtual void reset_motor_id() = 0;
-
-    /**
-     * @brief Gets the size of the command data for this motor.
-     */
-    virtual uint8_t get_command_size() { return 8; }
-
-    /**
-     * @brief Packs the current control data into the provided buffer slot.
-     */
-    virtual void pack_cmd_data(uint8_t* buffer) {}
 
     /**
      * @brief Retrieves the name of the CAN/CAN-FD bus interface associated with the motor.

@@ -4,8 +4,8 @@
 #include <string>
 
 #include "motor_driver.hpp"
-#include "protocol/can/socket_can.hpp"
-#include "protocol/canfd/socket_canfd.hpp"
+#include "protocol/can_iso.hpp"
+#include "protocol/canfd_iso.hpp"
 
 enum EVOError {
     EVO_NO_ERROR = 0x00,
@@ -129,30 +129,21 @@ class EvoMotorDriver : public MotorDriver {
     virtual bool write_motor_flash() override;
     virtual void get_motor_param(uint8_t param_cmd) override;
     
-    virtual void motor_pos_cmd(float pos, float spd, bool ignore_limit) override {}; //todo
-    virtual void motor_spd_cmd(float spd) override {}; //todo
+    virtual void motor_pos_cmd(float pos, float spd, bool ignore_limit) override;
+    virtual void motor_spd_cmd(float spd) override;
     virtual void motor_mit_cmd(float f_p, float f_v, float f_kp, float f_kd, float f_t) override;
     virtual void motor_mit_cmd(float* f_p, float* f_v, float* f_kp, float* f_kd, float* f_t) override;
     virtual void set_motor_control_mode(uint8_t motor_control_mode) override;
     virtual int get_response_count() const { 
         return response_count_; 
     }
-    virtual void set_motor_id(uint8_t old_id, uint8_t new_id) override {}; //todo
-    virtual void reset_motor_id() override {}; //todo
+    virtual void set_motor_id(uint8_t old_id, uint8_t new_id) override;
+    virtual void reset_motor_id() override;
     virtual void refresh_motor_status() override;
     virtual void clear_motor_error() override;
 
-    virtual uint8_t get_command_size() override { return 8; }
-    virtual void pack_cmd_data(uint8_t* buffer) override;
-
    private:
     uint8_t motor_index_{0};
-
-    std::atomic<float> target_pos_{0.0f};
-    std::atomic<float> target_spd_{0.0f};
-    std::atomic<float> target_kp_{0.0f};
-    std::atomic<float> target_kd_{0.0f};
-    std::atomic<float> target_trq_{0.0f};
 
     std::atomic<int> response_count_{0};
     EVO_Motor_Model motor_model_;
@@ -163,9 +154,12 @@ class EvoMotorDriver : public MotorDriver {
     void write_register_evo(uint8_t rid, float value);
     void write_register_evo(uint8_t index, int32_t value);
     void save_register_evo();
-    
+
     virtual void can_rx_cbk(const can_frame& rx_frame);
     virtual void canfd_rx_cbk(const canfd_frame& rx_frame);
-    std::shared_ptr<MotorsSocketCAN> can_;
-    std::shared_ptr<MotorsSocketCANFD> canfd_;
+    std::shared_ptr<MotorsCAN> can_;
+    std::shared_ptr<MotorsCANFD> canfd_;
+
+    inline static std::mutex bus_registry_mutex_;
+    inline static std::unordered_map<std::string, std::vector<EvoMotorDriver*>> bus_registry_; 
 };
