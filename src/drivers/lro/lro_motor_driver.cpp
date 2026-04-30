@@ -367,8 +367,7 @@ void LroMotorDriver::motor_mit_cmd(float* f_p, float* f_v, float* f_kp, float* f
         float p_f, v_f, kp_f, kd_f, t_f;
         uint16_t p, v, kp, kd, t;
 
-        p_f = limit(f_p[slot] - static_cast<float>(motor_zero_offset_),
-                          -limit_param_.PosMax, limit_param_.PosMax);
+        p_f = limit(f_p[slot] - static_cast<float>(motor_zero_offset_), -limit_param_.PosMax, limit_param_.PosMax);
         v_f = limit(f_v[slot], -limit_param_.SpdMax, limit_param_.SpdMax);
         kp_f = limit(f_kp[slot], 0.0f, limit_param_.OKpMax);
         kd_f = limit(f_kd[slot], 0.0f, limit_param_.OKdMax);

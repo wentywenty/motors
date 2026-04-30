@@ -34,11 +34,9 @@ PYBIND11_MODULE(motors_py, m) {
         .def("set_motor_zero", &MotorDriver::set_motor_zero)
         .def("write_motor_flash", &MotorDriver::write_motor_flash)
         .def("get_motor_param", &MotorDriver::get_motor_param)
-        .def("motor_pos_cmd", &MotorDriver::motor_pos_cmd,
-             py::arg("pos"), py::arg("spd"), py::arg("ignore_limit") = false)
+        .def("motor_pos_cmd", &MotorDriver::motor_pos_cmd, py::arg("pos"), py::arg("spd"), py::arg("ignore_limit") = false)
         .def("motor_spd_cmd", &MotorDriver::motor_spd_cmd)
-        .def("motor_mit_cmd",
-             static_cast<void (MotorDriver::*)(float, float, float, float, float)>(&MotorDriver::motor_mit_cmd))
+        .def("motor_mit_cmd", static_cast<void (MotorDriver::*)(float, float, float, float, float)>(&MotorDriver::motor_mit_cmd))
         .def("set_motor_control_mode", &MotorDriver::set_motor_control_mode)
         .def("get_response_count", &MotorDriver::get_response_count)
         .def("refresh_motor_status", &MotorDriver::refresh_motor_status)

@@ -42,7 +42,6 @@ target_link_libraries(motors PUBLIC ${PUBLIC_DEPENDENCIES}
 )
 
 install(DIRECTORY include/ DESTINATION include)
-install(DIRECTORY src/ DESTINATION include FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp")
 
 install(TARGETS motors dm_motors evo_motors lro_motors motors_can motors_canfd 
   LIBRARY DESTINATION lib

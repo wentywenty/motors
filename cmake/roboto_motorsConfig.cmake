@@ -50,8 +50,8 @@ _add_imported_lib(lro_motors)
 _add_imported_lib(motors_can)
 _add_imported_lib(motors_canfd)
 # _add_imported_lib(motors_ethercanfd)
-# _add_imported_lib(motors_ethercant)
-# _add_imported_lib(motors_group_ethercant)
+# _add_imported_lib(motors_igh)
+# _add_imported_lib(motors_soem)
 
 # Create the INTERFACE target
 add_library(roboto_motors::roboto_motors INTERFACE IMPORTED)

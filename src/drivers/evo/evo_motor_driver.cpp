@@ -471,46 +471,41 @@ void EvoMotorDriver::motor_mit_cmd(float* f_p, float* f_v, float* f_kp, float* f
         base[7] = 0xFF;
     }
 
-    {
-        std::lock_guard<std::mutex> lock(bus_registry_mutex_);
-        auto it = bus_registry_.find(can_interface_);
-        if (it != bus_registry_.end()) {
-            for (EvoMotorDriver* motor : it->second) {
-                if (!motor || motor->motor_index_ >= 8) {
-                    continue;
-                }
-                const uint8_t slot = motor->motor_index_;
-                
-                float p_f, v_f, kp_f, kd_f, t_f;
-                uint16_t p, v, kp, kd, t;
-
-                p_f = limit(f_p[slot] - static_cast<float>(motor->motor_zero_offset_), -motor->limit_param_.PosMax, motor->limit_param_.PosMax);
-                v_f = limit(f_v[slot], -motor->limit_param_.SpdMax, motor->limit_param_.SpdMax);
-                kp_f = limit(f_kp[slot], 0.0f, motor->limit_param_.OKpMax);
-                kd_f = limit(f_kd[slot], 0.0f, motor->limit_param_.OKdMax);
-                t_f = limit(f_t[slot], -motor->limit_param_.TauMax, motor->limit_param_.TauMax);
-
-                p = range_map(p_f, -motor->limit_param_.PosMax, motor->limit_param_.PosMax, uint16_t(0), uint16_t(0xFFFF));
-                v = range_map(v_f, -motor->limit_param_.SpdMax, motor->limit_param_.SpdMax, uint16_t(0), uint16_t(0x0FFF));
-                kp = range_map(kp_f, 0.0f, motor->limit_param_.OKpMax, uint16_t(0), uint16_t(0x0FFF));
-                kd = range_map(kd_f, 0.0f, motor->limit_param_.OKdMax, uint16_t(0), uint16_t(0x0FFF));
-                t = range_map(t_f, -motor->limit_param_.TauMax, motor->limit_param_.TauMax, uint16_t(0), uint16_t(0x0FFF));
-
-                uint8_t* base = &tx_frame.data[slot * 8];
-                base[0] = (p >> 8) & 0xFF;
-                base[1] = p & 0xFF;
-                base[2] = (v >> 4) & 0xFF;
-                base[3] = ((v & 0x0F) << 4) | ((kp >> 8) & 0x0F);
-                base[4] = kp & 0xFF;
-                base[5] = (kd >> 4) & 0xFF;
-                base[6] = ((kd & 0x0F) << 4) | ((t >> 8) & 0x0F);
-                base[7] = t & 0xFF;
-
-                motor->response_count_++;
+    std::lock_guard<std::mutex> lock(bus_registry_mutex_);
+    auto it = bus_registry_.find(can_interface_);
+    if (it != bus_registry_.end()) {
+        for (EvoMotorDriver* motor : it->second) {
+            if (!motor || motor->motor_index_ >= 8) {
+                continue;
             }
+            const uint8_t slot = motor->motor_index_;
+            
+            float p_f, v_f, kp_f, kd_f, t_f;
+            uint16_t p, v, kp, kd, t;
+
+            p_f = limit(f_p[slot] - static_cast<float>(motor->motor_zero_offset_), -motor->limit_param_.PosMax, motor->limit_param_.PosMax);
+            v_f = limit(f_v[slot], -motor->limit_param_.SpdMax, motor->limit_param_.SpdMax);
+            kp_f = limit(f_kp[slot], 0.0f, motor->limit_param_.OKpMax);
+            kd_f = limit(f_kd[slot], 0.0f, motor->limit_param_.OKdMax);
+            t_f = limit(f_t[slot], -motor->limit_param_.TauMax, motor->limit_param_.TauMax);
+
+            p = range_map(p_f, -motor->limit_param_.PosMax, motor->limit_param_.PosMax, uint16_t(0), uint16_t(0xFFFF));
+            v = range_map(v_f, -motor->limit_param_.SpdMax, motor->limit_param_.SpdMax, uint16_t(0), uint16_t(0x0FFF));
+            kp = range_map(kp_f, 0.0f, motor->limit_param_.OKpMax, uint16_t(0), uint16_t(0x0FFF));
+            kd = range_map(kd_f, 0.0f, motor->limit_param_.OKdMax, uint16_t(0), uint16_t(0x0FFF));
+            t = range_map(t_f, -motor->limit_param_.TauMax, motor->limit_param_.TauMax, uint16_t(0), uint16_t(0x0FFF));
+
+            uint8_t* base = &tx_frame.data[slot * 8];
+            base[0] = (p >> 8) & 0xFF;
+            base[1] = p & 0xFF;
+            base[2] = (v >> 4) & 0xFF;
+            base[3] = ((v & 0x0F) << 4) | ((kp >> 8) & 0x0F);
+            base[4] = kp & 0xFF;
+            base[5] = (kd >> 4) & 0xFF;
+            base[6] = ((kd & 0x0F) << 4) | ((t >> 8) & 0x0F);
+            base[7] = t & 0xFF;
         }
     }
-
     canfd_->transmit(tx_frame);
     {
         response_count_++;

@@ -6,6 +6,7 @@
 #include "motor_driver.hpp"
 #include "protocol/canfd_iso.hpp"
 // #include "protocol/ethercat_iso.hpp"
+#include "utils.hpp"
 
 // LeadRobot error codes (from type-1 feedback, 5-bit error field)
 enum LROError : uint8_t {

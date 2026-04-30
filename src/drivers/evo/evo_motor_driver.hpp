@@ -6,6 +6,7 @@
 #include "motor_driver.hpp"
 #include "protocol/can_iso.hpp"
 #include "protocol/canfd_iso.hpp"
+#include "utils.hpp"
 
 enum EVOError {
     EVO_NO_ERROR = 0x00,

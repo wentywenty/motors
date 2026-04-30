@@ -1,5 +1,5 @@
 add_subdirectory(can)
 add_subdirectory(canfd)
 # add_subdirectory(ethercanfd)
-# add_subdirectory(ethercat)
-# add_subdirectory(group_ethercat)
+# add_subdirectory(igh)
+# add_subdirectory(soem)

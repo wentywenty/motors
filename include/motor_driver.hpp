@@ -12,8 +12,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include "utils.hpp"
-
 enum class CommType {
     CAN = 0,         // Standard CAN 2.0 (8-byte payload)
     CANFD = 1,       // Physical CAN-FD (64-byte payload slot)
@@ -39,21 +37,6 @@ class MotorDriver {
     static std::shared_ptr<MotorDriver> create_motor(uint16_t motor_id, const std::string& interface_type, const std::string& interface,
                                                     const std::string& motor_type, const int motor_model, uint16_t master_id_offset=0, const double motor_zero_offset=0.0);
     
-    /**
-    * @brief Retrieves the broadcast control CAN ID for Multi-Drop (One-to-Many) mode based on the motor brand.
-    * * This static function acts as the system's "Protocol Dictionary," responsible for providing 
-    * the synchronization control identifiers required by the physical layer for different 
-    * brands (e.g., LeadRobot LRO, EVO).
-    *
-    * @param motor_type Motor brand/type string:
-    * - "LRO": Returns LeadRobot specialized Extended Frame ID (0x8080 | CAN_EFF_FLAG).
-    * - "EVO": Returns EVO specialized Standard Frame ID (0x20).
-    * - "XYN": Returns Xynova specialized Standard Frame ID (0x20).
-    * - Others: Returns 0, indicating the brand does not support or is not configured for Multi-Drop mode.
-    * * @return uint32_t The physical layer broadcast ID. Returns 0 if the brand does not support Multi-Drop.
-    */
-    static uint32_t get_group_can_id(const std::string& motor_type);
-
     /**
      * @brief Locks the motor to prevent movement.
      *

@@ -6,6 +6,7 @@
 #include "motor_driver.hpp"
 #include "protocol/can_iso.hpp"
 #include "protocol/canfd_iso.hpp"
+#include "utils.hpp"
 
 enum DMError {
     DM_DOWN = 0x00,
