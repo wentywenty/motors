@@ -429,10 +429,10 @@ void LroMotorDriver::set_motor_control_mode(uint8_t motor_control_mode) {
     // 4. Update Internal State
     motor_control_mode_ = motor_control_mode;
 
-    // 5. Warning for Experimental Modes
-    if (motor_control_mode != LRO_MODE_MIT && motor_control_mode != 0x00) {
-        logger_->warn("Mode {} is not fully tested; MIT mode is recommended for LRO series", motor_control_mode);
-    }
+    // // 5. Warning for Experimental Modes
+    // if (motor_control_mode != LRO_MODE_MIT && motor_control_mode != 0x00) {
+    //     logger_->warn("Mode {} is not fully tested; MIT mode is recommended for LRO series", motor_control_mode);
+    // }
 }
 
 void LroMotorDriver::set_motor_id(uint8_t old_id, uint8_t new_id) {
